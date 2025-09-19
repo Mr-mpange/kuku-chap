@@ -4,6 +4,9 @@ import { ArrowRight, BarChart3, Shield, Users, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
 import heroFarm from "@/assets/hero-farm.jpg";
 import chickenIcon from "@/assets/chicken-icon.png";
+import dashboardPreview from "@/assets/dashboard-preview.jpg";
+import marketplacePreview from "@/assets/marketplace-preview.jpg";
+import farmersTechnology from "@/assets/farmers-technology.jpg";
 
 const features = [
   {
@@ -103,9 +106,9 @@ export default function Home() {
             {features.map((feature, index) => {
               const Icon = feature.icon;
               return (
-                <Card key={index} className="border-0 shadow-medium hover:shadow-large transition-smooth">
+                <Card key={index} className="border-0 shadow-medium hover:shadow-large transition-smooth group">
                   <CardHeader className="text-center">
-                    <div className="mx-auto w-12 h-12 bg-gradient-primary rounded-lg flex items-center justify-center mb-4">
+                    <div className="mx-auto w-12 h-12 bg-gradient-primary rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                       <Icon className="h-6 w-6 text-white" />
                     </div>
                     <CardTitle className="text-lg">{feature.title}</CardTitle>
@@ -118,6 +121,128 @@ export default function Home() {
                 </Card>
               );
             })}
+          </div>
+        </div>
+      </section>
+
+      {/* Screenshots Section */}
+      <section className="py-24">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl lg:text-4xl font-bold text-foreground mb-4">
+              See ChickTrack in Action
+            </h2>
+            <p className="text-xl text-muted-foreground">
+              Intuitive interfaces designed for real farm operations
+            </p>
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+            <div>
+              <img 
+                src={dashboardPreview} 
+                alt="Dashboard Preview" 
+                className="rounded-lg shadow-large border"
+              />
+            </div>
+            <div className="space-y-6">
+              <h3 className="text-2xl font-bold text-foreground">
+                Comprehensive Dashboard
+              </h3>
+              <p className="text-lg text-muted-foreground">
+                Monitor all your farm operations from a single, intuitive dashboard. 
+                Track production metrics, health indicators, and financial performance in real-time.
+              </p>
+              <ul className="space-y-2">
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-primary rounded-full" />
+                  <span>Real-time production tracking</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-primary rounded-full" />
+                  <span>Health monitoring alerts</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-primary rounded-full" />
+                  <span>Financial performance insights</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center mt-20">
+            <div className="lg:order-2">
+              <img 
+                src={marketplacePreview} 
+                alt="Marketplace Preview" 
+                className="rounded-lg shadow-large border"
+              />
+            </div>
+            <div className="space-y-6 lg:order-1">
+              <h3 className="text-2xl font-bold text-foreground">
+                Integrated Marketplace
+              </h3>
+              <p className="text-lg text-muted-foreground">
+                Connect directly with buyers and suppliers through our built-in marketplace. 
+                Manage orders, track inventory, and grow your customer base.
+              </p>
+              <ul className="space-y-2">
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-accent rounded-full" />
+                  <span>Direct buyer connections</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-accent rounded-full" />
+                  <span>Order management system</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-accent rounded-full" />
+                  <span>Inventory tracking</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Technology Section */}
+      <section className="py-24 bg-muted/30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+            <div className="space-y-6">
+              <h2 className="text-3xl lg:text-4xl font-bold text-foreground">
+                Modern Technology for Modern Farmers
+              </h2>
+              <p className="text-lg text-muted-foreground">
+                Built with the latest technology to provide reliable, scalable solutions 
+                for farms of all sizes. Access your data anywhere, anytime.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center p-4 bg-card rounded-lg shadow-soft">
+                  <div className="text-2xl font-bold text-primary mb-1">99.9%</div>
+                  <div className="text-sm text-muted-foreground">Uptime</div>
+                </div>
+                <div className="text-center p-4 bg-card rounded-lg shadow-soft">
+                  <div className="text-2xl font-bold text-primary mb-1">24/7</div>
+                  <div className="text-sm text-muted-foreground">Support</div>
+                </div>
+                <div className="text-center p-4 bg-card rounded-lg shadow-soft">
+                  <div className="text-2xl font-bold text-primary mb-1">100+</div>
+                  <div className="text-sm text-muted-foreground">Features</div>
+                </div>
+                <div className="text-center p-4 bg-card rounded-lg shadow-soft">
+                  <div className="text-2xl font-bold text-primary mb-1">5★</div>
+                  <div className="text-sm text-muted-foreground">Rating</div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <img 
+                src={farmersTechnology} 
+                alt="Farmers using technology" 
+                className="rounded-lg shadow-large"
+              />
+            </div>
           </div>
         </div>
       </section>
