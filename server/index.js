@@ -218,25 +218,61 @@ app.post('/api/sms/send', async (req, res) => {
     const baseUrl = process.env.BRIQ_BASE_URL;
     const apiKey = process.env.BRIQ_API_KEY;
     const senderId = process.env.BRIQ_SENDER_ID;
+    const smsPath = (process.env.BRIQ_SMS_PATH || '/sms/send').replace(/\s+/g, '');
+    const authHeaderKey = process.env.BRIQ_AUTH_HEADER_KEY || 'Authorization';
+    const useFake = process.env.SMS_FAKE === '1' || process.env.BRIQ_USE_MOCK === '1';
     const { to, message } = req.body || {};
     if (!to || !message) return res.status(400).json({ error: 'to and message are required' });
+    if (useFake) {
+      console.log(`[SMS_FAKE] to=${to} from=${senderId || 'N/A'} msg=${message}`);
+      return res.json({ ok: true, fake: true });
+    }
     if (!baseUrl || !apiKey) return res.status(500).json({ error: 'Briq is not configured' });
 
     // Attempt a generic Briq-style request; adjust path/fields to match your account docs if needed
-    const url = `${baseUrl.replace(/\/$/, '')}/sms/send`;
+    const url = `${baseUrl.replace(/\/$/, '')}${smsPath.startsWith('/') ? smsPath : `/${smsPath}`}`;
     const body = { to, message, from: senderId };
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    async function sendWithRetry(attempt = 1) {
+      const controller = new AbortController();
+      const timeoutMs = Number(process.env.SMS_TIMEOUT_MS || 10000);
+      const t = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+        // Allow custom header key for API key, fallback to Bearer
+        if (authHeaderKey.toLowerCase() === 'authorization') {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        } else {
+          headers[authHeaderKey] = apiKey;
+        }
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(t);
+        return response;
+      } catch (err) {
+        clearTimeout(t);
+        if (attempt < 2) {
+          console.warn(`Briq SMS attempt ${attempt} failed, retrying...`, err?.code || err?.name || '');
+          return sendWithRetry(attempt + 1);
+        }
+        const msg = err && (err.code === 'ENOTFOUND' ? `DNS lookup failed for ${new URL(url).hostname}` : (err?.message || 'Network error'));
+        console.error('Briq SMS fetch error:', err);
+        return { ok: false, _networkError: true, _detail: msg };
+      }
+    }
+    const r = await sendWithRetry();
     if (!r.ok) {
+      if (r._networkError) {
+        return res.status(502).json({ error: 'Briq SMS network error', detail: r._detail });
+      }
       const t = await r.text();
       console.error('Briq SMS error:', t);
-      return res.status(502).json({ error: 'Briq SMS failed' });
+      return res.status(502).json({ error: 'Briq SMS failed', detail: t });
     }
     const data = await r.json().catch(()=>({ ok: true }));
     res.json({ ok: true, data });

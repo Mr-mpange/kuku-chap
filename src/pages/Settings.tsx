@@ -533,10 +533,19 @@ export default function SettingsPage() {
                   if (!smsPhone.trim()) { toast({ title: 'Phone required', description: 'Please enter a phone number.' }); return; }
                   try {
                     const res = await fetch('/api/sms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: 'briq', to: smsPhone.trim(), message: 'Your ChickTrack code is 123456' }) });
-                    if (!res.ok) throw new Error(await res.text());
+                    if (!res.ok) {
+                      const txt = await res.text();
+                      try {
+                        const j = JSON.parse(txt);
+                        throw new Error(j.detail || j.error || 'Could not send SMS');
+                      } catch {
+                        throw new Error(txt || 'Could not send SMS');
+                      }
+                    }
                     toast({ title: 'SMS sent', description: `A 6-digit code was sent to ${smsPhone}` });
                   } catch (e) {
-                    toast({ title: 'SMS failed', description: 'Could not send SMS. Please try again.' });
+                    const msg = e instanceof Error ? e.message : 'Could not send SMS. Please try again.';
+                    toast({ title: 'SMS failed', description: msg });
                   }
                 }}>Send SMS code</Button>
               </div>
