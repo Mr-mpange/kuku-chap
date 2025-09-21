@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Calendar,
   Plus,
@@ -17,43 +18,81 @@ import {
   FileText,
   Clock
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { toast } from "@/hooks/use-toast";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { usePreferences } from "@/context/preferences";
 
-const recentLogs = [
-  {
-    id: 1,
-    date: "2024-01-20",
-    batch: "Batch Alpha",
-    eggs: 89,
-    feed: 45,
-    deaths: 0,
-    expenses: 25.50,
-    notes: "All chickens healthy, good production day"
-  },
-  {
-    id: 2,
-    date: "2024-01-19", 
-    batch: "Batch Beta",
-    eggs: 120,
-    feed: 52,
-    deaths: 1,
-    expenses: 30.00,
-    notes: "One chicken found sick, isolated for treatment"
-  },
-  {
-    id: 3,
-    date: "2024-01-19",
-    batch: "Batch Gamma",
-    eggs: 145,
-    feed: 48,
-    deaths: 0,
-    expenses: 22.75,
-    notes: "Excellent production, feed consumption normal"
-  }
-];
+type LogItem = { id: number; batchCode: string; date: string; eggs: number; feedKg: number; deaths: number; expenses: number; notes?: string };
+type Batch = { id: number; code: string; name: string };
+
+function useLogs(batchCode?: string) {
+  return useQuery({
+    queryKey: ["logs", batchCode ?? "all"],
+    queryFn: async () => {
+      const qs = batchCode ? `?batchCode=${encodeURIComponent(batchCode)}` : "";
+      const res = await fetch(`/api/logs${qs}`);
+      if (!res.ok) throw new Error("Failed to load logs");
+      return res.json() as Promise<LogItem[]>;
+    }
+  });
+}
+
+function useBatches() {
+  return useQuery({
+    queryKey: ["batches-min"],
+    queryFn: async () => {
+      const res = await fetch("/api/batches");
+      if (!res.ok) throw new Error("Failed to load batches");
+      const data = await res.json() as Array<Batch & { breed?: string; ageWeeks?: number; chickens?: number; status?: string }>;
+      return data.map(b => ({ id: b.id, code: b.code, name: b.name })) as Batch[];
+    }
+  });
+}
 
 export default function DailyLogs() {
+  const { formatCurrency } = usePreferences();
   const [selectedBatch, setSelectedBatch] = useState("");
+  const [eggs, setEggs] = useState<number | ''>("");
+  const [feed, setFeed] = useState<number | ''>("");
+  const [deaths, setDeaths] = useState<number | ''>("");
+  const [expenses, setExpenses] = useState<number | ''>("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const formRef = useRef<HTMLDivElement | null>(null);
+  const [editLog, setEditLog] = useState<LogItem | null>(null);
+  const [editEggs, setEditEggs] = useState<number | ''>("");
+  const [editFeed, setEditFeed] = useState<number | ''>("");
+  const queryClient = useQueryClient();
+
+  const { data: logs } = useLogs();
+  const { data: batches } = useBatches();
+
+  const createMutation = useMutation({
+    mutationFn: async (payload: { batchCode: string; date: string; eggs: number; feedKg: number; deaths: number; expenses: number; notes?: string }) => {
+      const res = await fetch("/api/logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["logs"] })
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, eggs, feedKg }: { id: number; eggs: number; feedKg: number }) => {
+      const res = await fetch(`/api/logs/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eggs, feedKg })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["logs"] })
+  });
 
   return (
     <MainLayout>
@@ -64,7 +103,7 @@ export default function DailyLogs() {
             <h1 className="text-3xl font-bold text-foreground">Daily Logs</h1>
             <p className="text-muted-foreground">Track daily farm activities and performance</p>
           </div>
-          <Button className="bg-gradient-primary hover:shadow-glow transition-smooth">
+          <Button onClick={()=>formRef.current?.scrollIntoView({ behavior: 'smooth' })} className="bg-gradient-primary hover:shadow-glow transition-smooth">
             <Plus className="h-4 w-4 mr-2" />
             New Log Entry
           </Button>
@@ -72,7 +111,7 @@ export default function DailyLogs() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Log Entry Form */}
-          <Card className="lg:col-span-1">
+          <Card className="lg:col-span-1" ref={formRef as any}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
@@ -87,9 +126,9 @@ export default function DailyLogs() {
                     <SelectValue placeholder="Choose batch..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="B001">Batch Alpha</SelectItem>
-                    <SelectItem value="B002">Batch Beta</SelectItem>
-                    <SelectItem value="B003">Batch Gamma</SelectItem>
+                    {(batches ?? []).map(b => (
+                      <SelectItem key={b.id} value={b.code}>{b.name} ({b.code})</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -97,22 +136,22 @@ export default function DailyLogs() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="eggs">Eggs Collected</Label>
-                  <Input id="eggs" type="number" placeholder="0" />
+                  <Input id="eggs" type="number" placeholder="0" value={eggs} onChange={(e)=>setEggs(e.target.value === '' ? '' : Number(e.target.value))} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="feed">Feed Used (kg)</Label>
-                  <Input id="feed" type="number" placeholder="0" />
+                  <Input id="feed" type="number" placeholder="0" value={feed} onChange={(e)=>setFeed(e.target.value === '' ? '' : Number(e.target.value))} />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="deaths">Deaths</Label>
-                  <Input id="deaths" type="number" placeholder="0" />
+                  <Input id="deaths" type="number" placeholder="0" value={deaths} onChange={(e)=>setDeaths(e.target.value === '' ? '' : Number(e.target.value))} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="expenses">Expenses ($)</Label>
-                  <Input id="expenses" type="number" step="0.01" placeholder="0.00" />
+                  <Input id="expenses" type="number" step="0.01" placeholder="0.00" value={expenses} onChange={(e)=>setExpenses(e.target.value === '' ? '' : Number(e.target.value))} />
                 </div>
               </div>
 
@@ -122,11 +161,33 @@ export default function DailyLogs() {
                   id="notes"
                   placeholder="Daily observations, health notes, special events..."
                   rows={3}
+                  value={notes}
+                  onChange={(e)=>setNotes(e.target.value)}
                 />
               </div>
 
-              <Button className="w-full bg-gradient-primary hover:shadow-glow transition-smooth">
-                Save Log Entry
+              <Button onClick={async () => {
+                if (!selectedBatch) { toast({ title: 'Select a batch', description: 'Please choose a batch before saving.' }); return; }
+                setSaving(true);
+                try {
+                  await createMutation.mutateAsync({
+                    batchCode: selectedBatch,
+                    date: new Date().toISOString(),
+                    eggs: Number(eggs || 0),
+                    feedKg: Number(feed || 0),
+                    deaths: Number(deaths || 0),
+                    expenses: Number(expenses || 0),
+                    notes: notes || undefined
+                  });
+                  toast({ title: 'Log saved', description: 'Your daily log entry has been saved.' });
+                  setSelectedBatch(""); setEggs(""); setFeed(""); setDeaths(""); setExpenses(""); setNotes("");
+                } catch (_e) {
+                  toast({ title: 'Save failed', description: 'Could not save log.' });
+                } finally {
+                  setSaving(false);
+                }
+              }} className="w-full bg-gradient-primary hover:shadow-glow transition-smooth" disabled={saving}>
+                {saving ? 'Saving...' : 'Save Log Entry'}
               </Button>
             </CardContent>
           </Card>
@@ -150,12 +211,12 @@ export default function DailyLogs() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {recentLogs.map((log) => (
+                {(logs ?? []).map((log) => (
                   <div key={log.id} className="border rounded-lg p-4 space-y-3 hover:bg-muted/30 transition-smooth">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="text-sm font-medium">{log.date}</div>
-                        <Badge variant="outline">{log.batch}</Badge>
+                        <div className="text-sm font-medium">{new Date(log.date).toLocaleDateString()}</div>
+                        <Badge variant="outline">{log.batchCode}</Badge>
                         {log.deaths > 0 && (
                           <Badge variant="destructive" className="text-xs">
                             <AlertTriangle className="h-3 w-3 mr-1" />
@@ -163,7 +224,7 @@ export default function DailyLogs() {
                           </Badge>
                         )}
                       </div>
-                      <Button variant="ghost" size="sm">Edit</Button>
+                      <Button variant="ghost" size="sm" onClick={()=>{ setEditLog(log); setEditEggs(log.eggs); setEditFeed(log.feedKg); }}>Edit</Button>
                     </div>
 
                     <div className="grid grid-cols-4 gap-4 text-sm">
@@ -175,12 +236,12 @@ export default function DailyLogs() {
                       <div className="flex items-center gap-2">
                         <Utensils className="h-4 w-4 text-primary" />
                         <span className="text-muted-foreground">Feed:</span>
-                        <span className="font-medium">{log.feed}kg</span>
+                        <span className="font-medium">{log.feedKg}kg</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <DollarSign className="h-4 w-4 text-success" />
                         <span className="text-muted-foreground">Cost:</span>
-                        <span className="font-medium">${log.expenses}</span>
+                        <span className="font-medium">{formatCurrency(log.expenses)}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <AlertTriangle className="h-4 w-4 text-destructive" />
@@ -264,6 +325,47 @@ export default function DailyLogs() {
           </Card>
         </div>
       </div>
+      <Dialog open={!!editLog} onOpenChange={(o)=>!o && setEditLog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Log Entry</DialogTitle>
+          </DialogHeader>
+          {editLog && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Date</Label>
+                <Input value={new Date(editLog.date).toLocaleDateString()} readOnly />
+              </div>
+              <div>
+                <Label>Batch</Label>
+                <Input value={editLog.batchCode} readOnly />
+              </div>
+              <div>
+                <Label>Eggs</Label>
+                <Input type="number" value={editEggs} onChange={(e)=>setEditEggs(e.target.value === '' ? '' : Number(e.target.value))} />
+              </div>
+              <div>
+                <Label>Feed (kg)</Label>
+                <Input type="number" value={editFeed} onChange={(e)=>setEditFeed(e.target.value === '' ? '' : Number(e.target.value))} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={()=>setEditLog(null)}>Close</Button>
+            <Button className="bg-gradient-primary" onClick={async ()=>{
+              if (!editLog) return;
+              try {
+                await updateMutation.mutateAsync({ id: editLog.id, eggs: Number(editEggs || 0), feedKg: Number(editFeed || 0) });
+                toast({ title: 'Updated', description: 'Log updated.' });
+              } catch (_e) {
+                toast({ title: 'Update failed', description: 'Could not update log.' });
+              } finally {
+                setEditLog(null);
+              }
+            }}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }

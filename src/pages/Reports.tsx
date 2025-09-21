@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   BarChart3,
   TrendingUp,
@@ -14,31 +15,68 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
+import { useState } from "react";
+import { toast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
 
-// Sample data for charts
-const productionData = [
-  { date: "Jan 15", eggs: 120, feed: 45, revenue: 180 },
-  { date: "Jan 16", eggs: 132, feed: 42, revenue: 198 },
-  { date: "Jan 17", eggs: 125, feed: 48, revenue: 187 },
-  { date: "Jan 18", eggs: 140, feed: 44, revenue: 210 },
-  { date: "Jan 19", eggs: 138, feed: 46, revenue: 207 },
-  { date: "Jan 20", eggs: 145, feed: 43, revenue: 218 }
-];
+type Summary = { revenue: number; eggsTotal: number; expensesTotal: number };
+type ProdPoint = { date: string; eggs: number; feed: number; revenue: number; name: string };
+type ExpenseSlice = { name: string; value: number; color: string };
+type PerfItem = { batch: string; eggs: number; efficiency: number; health: string };
 
-const batchPerformance = [
-  { batch: "Alpha", eggs: 890, efficiency: 85, health: "Good" },
-  { batch: "Beta", eggs: 1200, efficiency: 92, health: "Excellent" },
-  { batch: "Gamma", eggs: 1450, efficiency: 88, health: "Good" }
-];
+function useReportSummary() {
+  return useQuery<Summary>({
+    queryKey: ["report-summary"],
+    queryFn: async () => {
+      const r = await fetch("/api/reports/summary");
+      if (!r.ok) throw new Error("Failed to load summary");
+      return r.json();
+    }
+  });
+}
 
-const expenseBreakdown = [
-  { name: "Feed", value: 1250, color: "#10b981" },
-  { name: "Healthcare", value: 320, color: "#f59e0b" },
-  { name: "Equipment", value: 180, color: "#ef4444" },
-  { name: "Labor", value: 480, color: "#8b5cf6" }
-];
+function useProduction(days = 6) {
+  return useQuery<ProdPoint[]>({
+    queryKey: ["report-production", days],
+    queryFn: async () => {
+      const r = await fetch(`/api/reports/production?days=${days}`);
+      if (!r.ok) throw new Error("Failed to load production data");
+      return r.json();
+    }
+  });
+}
+
+function useExpenseBreakdown() {
+  return useQuery<ExpenseSlice[]>({
+    queryKey: ["report-expense-breakdown"],
+    queryFn: async () => {
+      const r = await fetch("/api/reports/expense-breakdown");
+      if (!r.ok) throw new Error("Failed to load expense breakdown");
+      return r.json();
+    }
+  });
+}
+
+function useBatchPerformance() {
+  return useQuery<PerfItem[]>({
+    queryKey: ["report-batch-performance"],
+    queryFn: async () => {
+      const r = await fetch("/api/reports/batch-performance");
+      if (!r.ok) throw new Error("Failed to load batch performance");
+      return r.json();
+    }
+  });
+}
 
 export default function Reports() {
+  const [openDetails, setOpenDetails] = useState<null | PerfItem>(null);
+  const { data: summary } = useReportSummary();
+  const { data: production } = useProduction(6);
+  const { data: expenses } = useExpenseBreakdown();
+  const { data: performance } = useBatchPerformance();
+  // Provide safe data for charts to avoid runtime errors and blank screens
+  const productionData = production ?? [];
+  const expenseBreakdown = expenses ?? [];
   return (
     <MainLayout>
       <div className="p-6 lg:p-8 space-y-8">
@@ -60,7 +98,7 @@ export default function Reports() {
                 <SelectItem value="year">This Year</SelectItem>
               </SelectContent>
             </Select>
-            <Button className="bg-gradient-primary hover:shadow-glow transition-smooth">
+            <Button onClick={()=>toast({ title: 'Export started', description: 'Generating report (demo)...' })} className="bg-gradient-primary hover:shadow-glow transition-smooth">
               <Download className="h-4 w-4 mr-2" />
               Export Report
             </Button>
@@ -73,8 +111,8 @@ export default function Reports() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-2xl font-bold text-foreground">$12,450</p>
-                  <p className="text-sm text-muted-foreground">Total Revenue</p>
+                  <p className="text-2xl font-bold text-foreground">${summary ? summary.revenue.toLocaleString() : "—"}</p>
+                  <p className="text-sm text-muted-foreground">Total Revenue (est.)</p>
                   <Badge variant="secondary" className="mt-1 text-xs">
                     <TrendingUp className="h-3 w-3 mr-1" />
                     +18% vs last month
@@ -89,7 +127,7 @@ export default function Reports() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-2xl font-bold text-foreground">8,547</p>
+                  <p className="text-2xl font-bold text-foreground">{summary ? summary.eggsTotal.toLocaleString() : "—"}</p>
                   <p className="text-sm text-muted-foreground">Total Eggs</p>
                   <Badge variant="secondary" className="mt-1 text-xs">
                     <TrendingUp className="h-3 w-3 mr-1" />
@@ -246,7 +284,7 @@ export default function Reports() {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchPerformance.map((batch, index) => (
+                  {(performance ?? []).map((batch, index) => (
                     <tr key={index} className="border-b hover:bg-muted/30 transition-smooth">
                       <td className="p-3 font-medium">Batch {batch.batch}</td>
                       <td className="p-3">{batch.eggs.toLocaleString()}</td>
@@ -268,7 +306,7 @@ export default function Reports() {
                       </td>
                       <td className="p-3">${(Number(batch.eggs) * 0.15).toFixed(2)}</td>
                       <td className="p-3">
-                        <Button variant="ghost" size="sm">View Details</Button>
+                        <Button variant="ghost" size="sm" onClick={()=>setOpenDetails(batch)}>View Details</Button>
                       </td>
                     </tr>
                   ))}
@@ -288,15 +326,15 @@ export default function Reports() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Button variant="outline" className="justify-start">
+              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Monthly Summary (PDF) — demo' })}>
                 <Calendar className="h-4 w-4 mr-2" />
                 Monthly Summary (PDF)
               </Button>
-              <Button variant="outline" className="justify-start">
+              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Production Data (CSV) — demo' })}>
                 <BarChart3 className="h-4 w-4 mr-2" />
                 Production Data (CSV)
               </Button>
-              <Button variant="outline" className="justify-start">
+              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Financial Report (Excel) — demo' })}>
                 <DollarSign className="h-4 w-4 mr-2" />
                 Financial Report (Excel)
               </Button>
@@ -304,6 +342,24 @@ export default function Reports() {
           </CardContent>
         </Card>
       </div>
+      <Dialog open={!!openDetails} onOpenChange={(o)=>!o && setOpenDetails(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Batch Report Details</DialogTitle>
+          </DialogHeader>
+          {openDetails && (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Batch:</span><span className="font-medium">{openDetails.batch}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Eggs:</span><span className="font-medium">{openDetails.eggs}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Efficiency:</span><span className="font-medium">{openDetails.efficiency}%</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Health:</span><span className="font-medium">{openDetails.health}</span></div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={()=>setOpenDetails(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }

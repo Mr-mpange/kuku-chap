@@ -13,21 +13,51 @@ import {
   Calendar,
   Activity
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { usePreferences } from "@/context/preferences";
 
-const recentBatches = [
-  { id: "B001", name: "Batch Alpha", age: "12 weeks", chickens: 150, status: "Healthy" },
-  { id: "B002", name: "Batch Beta", age: "8 weeks", chickens: 200, status: "Monitoring" },
-  { id: "B003", name: "Batch Gamma", age: "16 weeks", chickens: 180, status: "Healthy" },
-];
+function useDashboardStats() {
+  return useQuery({
+    queryKey: ["dashboard-stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/stats");
+      if (!res.ok) throw new Error("Failed to load stats");
+      return res.json() as Promise<{ totalChickens: number; dailyEggs: number; monthlyRevenue: number; mortalityRate: number; changes: Record<string,string> }>
+    }
+  });
+}
 
-const alerts = [
-  { type: "warning", message: "Feed levels low in Coop A", time: "2 hours ago" },
-  { type: "info", message: "Vaccination due for Batch Beta", time: "1 day ago" },
-];
+function useRecentBatches() {
+  return useQuery({
+    queryKey: ["recent-batches"],
+    queryFn: async () => {
+      const res = await fetch("/api/batches/recent");
+      if (!res.ok) throw new Error("Failed to load batches");
+      return res.json() as Promise<Array<{ id: number; code: string; name: string; ageWeeks: number; chickens: number; status: string }>>
+    }
+  });
+}
+
+function useRecentAlerts() {
+  return useQuery({
+    queryKey: ["recent-alerts"],
+    queryFn: async () => {
+      const res = await fetch("/api/alerts/recent");
+      if (!res.ok) throw new Error("Failed to load alerts");
+      return res.json() as Promise<Array<{ id: number; type: "info" | "warning" | "error"; message: string; time: string }>>
+    }
+  });
+}
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+  const { formatCurrency } = usePreferences();
+  const { data: stats } = useDashboardStats();
+  const { data: recentBatches } = useRecentBatches();
+  const { data: alerts } = useRecentAlerts();
   return (
-    <MainLayout>
+    <MainLayout showFooter={false}>
       <div className="p-6 lg:p-8 space-y-8">
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -36,11 +66,11 @@ export default function Dashboard() {
             <p className="text-muted-foreground">Welcome back! Here's your farm overview.</p>
           </div>
           <div className="flex items-center gap-3">
-            <Button className="bg-gradient-primary hover:shadow-glow transition-smooth">
+            <Button onClick={() => navigate('/batches')} className="bg-gradient-primary hover:shadow-glow transition-smooth">
               <Plus className="h-4 w-4 mr-2" />
               New Batch
             </Button>
-            <Button variant="outline">
+            <Button variant="outline" onClick={() => navigate('/logs')}>
               <Calendar className="h-4 w-4 mr-2" />
               Add Log
             </Button>
@@ -51,29 +81,29 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatsCard
             title="Total Chickens"
-            value="1,247"
-            change="+12% from last month"
+            value={stats?.totalChickens ?? "—"}
+            change={stats ? `${stats.changes.totalChickens} from last month` : undefined}
             changeType="positive"
             icon={Activity}
           />
           <StatsCard
             title="Daily Eggs"
-            value="892"
-            change="+5% from yesterday"
+            value={stats?.dailyEggs ?? "—"}
+            change={stats ? `${stats.changes.dailyEggs} from yesterday` : undefined}
             changeType="positive"
             icon={Egg}
           />
           <StatsCard
             title="Monthly Revenue"
-            value="$4,250"
-            change="+18% from last month"
+            value={stats ? `${formatCurrency(stats.monthlyRevenue)}` : "—"}
+            change={stats ? `${stats.changes.monthlyRevenue} from last month` : undefined}
             changeType="positive"
             icon={DollarSign}
           />
           <StatsCard
             title="Mortality Rate"
-            value="2.1%"
-            change="-0.3% improvement"
+            value={stats ? `${stats.mortalityRate}%` : "—"}
+            change={stats ? `${stats.changes.mortalityRate} improvement` : undefined}
             changeType="positive"
             icon={TrendingUp}
           />
@@ -90,7 +120,7 @@ export default function Dashboard() {
               <CardTitle className="text-lg font-semibold">Active Batches</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {recentBatches.map((batch) => (
+              {recentBatches?.map((batch) => (
                 <div key={batch.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -100,7 +130,7 @@ export default function Dashboard() {
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {batch.chickens} chickens • {batch.age}
+                      {batch.chickens} chickens • {batch.ageWeeks} weeks
                     </p>
                   </div>
                   <Button variant="ghost" size="sm">View</Button>
@@ -123,10 +153,10 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {alerts.map((alert, index) => (
-                <div key={index} className="flex items-start gap-3 p-3 rounded-lg border">
+              {alerts?.map((alert) => (
+                <div key={alert.id} className="flex items-start gap-3 p-3 rounded-lg border">
                   <div className={`w-2 h-2 rounded-full mt-2 ${
-                    alert.type === "warning" ? "bg-warning" : "bg-primary"
+                    alert.type === "warning" ? "bg-warning" : alert.type === "error" ? "bg-destructive" : "bg-primary"
                   }`} />
                   <div className="flex-1">
                     <p className="text-sm text-foreground">{alert.message}</p>

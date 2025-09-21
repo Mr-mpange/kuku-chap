@@ -1,10 +1,12 @@
 import { Sidebar } from "./sidebar";
+import { Footer } from "./footer";
 
 interface MainLayoutProps {
   children: React.ReactNode;
+  showFooter?: boolean;
 }
 
-export function MainLayout({ children }: MainLayoutProps) {
+export function MainLayout({ children, showFooter = true }: MainLayoutProps) {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
@@ -12,6 +14,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         <main className="min-h-screen">
           {children}
         </main>
+        {showFooter && <Footer />}
       </div>
     </div>
   );

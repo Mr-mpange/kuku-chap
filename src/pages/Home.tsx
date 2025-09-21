@@ -1,12 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowRight, BarChart3, Shield, Users, Zap } from "lucide-react";
+import { ArrowRight, BarChart3, Shield, Users, Zap, Send } from "lucide-react";
 import { Link } from "react-router-dom";
 import heroFarm from "@/assets/hero-farm.jpg";
 import chickenIcon from "@/assets/chicken-icon.png";
 import dashboardPreview from "@/assets/dashboard-preview.jpg";
 import marketplacePreview from "@/assets/marketplace-preview.jpg";
 import farmersTechnology from "@/assets/farmers-technology.jpg";
+import { Footer } from "@/components/layout/footer";
+import { WhatsAppFloating } from "@/components/widgets/whatsapp-floating";
+import { AIBotFloating } from "@/components/widgets/ai-bot-floating";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 const features = [
   {
@@ -34,7 +39,7 @@ const features = [
 export default function Home() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
+      {/* Navigation (Login only) */}
       <nav className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -42,14 +47,9 @@ export default function Home() {
               <img src={chickenIcon} alt="ChickTrack" className="h-8 w-8" />
               <span className="text-xl font-bold text-primary">ChickTrack</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               <Link to="/login">
-                <Button variant="ghost">Login</Button>
-              </Link>
-              <Link to="/dashboard">
-                <Button className="bg-gradient-primary hover:shadow-glow transition-smooth">
-                  Get Started
-                </Button>
+                <Button variant="default" className="bg-gradient-primary hover:shadow-glow transition-smooth">Login</Button>
               </Link>
             </div>
           </div>
@@ -57,7 +57,7 @@ export default function Home() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative">
+      <section id="home" className="relative">
         <div className="absolute inset-0">
           <img 
             src={heroFarm} 
@@ -126,7 +126,7 @@ export default function Home() {
       </section>
 
       {/* Screenshots Section */}
-      <section className="py-24">
+      <section className="py-24" id="about">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl lg:text-4xl font-bold text-foreground mb-4">
@@ -265,20 +265,51 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t bg-card py-12">
+      {/* Contact Section */}
+      <section id="contact" className="py-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <img src={chickenIcon} alt="ChickTrack" className="h-6 w-6" />
-              <span className="font-semibold text-primary">ChickTrack</span>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              © 2024 ChickTrack. All rights reserved.
+          <div className="text-center mb-12">
+            <h2 className="text-3xl lg:text-4xl font-bold text-foreground mb-3">Contact Us</h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Have a question or need assistance? Our team is ready to help you get the most out of ChickTrack.
             </p>
           </div>
+          <div className="max-w-xl mx-auto">
+            {/* Contact Form */}
+            <form className="p-6 rounded-xl border bg-card shadow-medium space-y-4" aria-labelledby="contact-form-title">
+              <h3 id="contact-form-title" className="sr-only">Send us a message</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="fullName" className="text-sm text-muted-foreground">Full name</label>
+                  <Input id="fullName" name="fullName" placeholder="Jane Farmer" className="mt-1" required aria-required="true" />
+                </div>
+                <div>
+                  <label htmlFor="email" className="text-sm text-muted-foreground">Email</label>
+                  <Input id="email" name="email" type="email" placeholder="farmer@example.com" className="mt-1" required aria-required="true" />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="message" className="text-sm text-muted-foreground">Message</label>
+                <Textarea id="message" name="message" placeholder="How can we help?" className="mt-1 min-h-[140px]" required aria-required="true" />
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">We typically respond within one business day.</p>
+                <Button className="bg-gradient-primary hover:shadow-glow inline-flex items-center gap-2">
+                  <span>Send message</span>
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
-      </footer>
+      </section>
+
+      {/* Footer */}
+      <Footer />
+
+      {/* Floating Widgets */}
+      <WhatsAppFloating phone="15555550123" />
+      <AIBotFloating />
     </div>
   );
 }
