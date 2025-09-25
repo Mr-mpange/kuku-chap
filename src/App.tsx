@@ -13,6 +13,7 @@ import Marketplace from "./pages/Marketplace";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import Orders from "./pages/Orders";
+import Posted from "./pages/Posted";
 import NotFound from "./pages/NotFound";
 import { PreferencesProvider } from "./context/preferences";
 
@@ -33,6 +34,7 @@ const App = () => (
           <Route path="/batches" element={<Batches />} />
           <Route path="/logs" element={<DailyLogs />} />
           <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/posted" element={<Posted />} />
           <Route path="/orders" element={<Orders />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />

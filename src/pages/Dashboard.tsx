@@ -13,14 +13,18 @@ import {
   DollarSign,
   Plus,
   Calendar,
-  Activity
+  Activity,
+  Search,
+  ShoppingCart,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { usePreferences } from "@/context/preferences";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
+
+const productCategories = ["All", "Eggs", "Feed", "Live Birds", "Equipment", "Supplies"] as const;
 
 function useDashboardStats() {
   return useQuery<{
@@ -39,13 +43,17 @@ function useDashboardStats() {
   });
 }
 
-function usePostedProductsPreview() {
+function usePostedProductsPreview(params: { excludeSeller?: string[]; excludeContactContains?: string[] }) {
+  const { excludeSeller = [], excludeContactContains = [] } = params;
   return useQuery({
-    queryKey: ["posted-products-preview"],
+    queryKey: ["posted-products-preview", { excludeSeller, excludeContactContains }],
     queryFn: async () => {
-      const res = await fetch("/api/products?limit=4&offset=0");
+      const q = new URLSearchParams({ limit: '4', offset: '0' });
+      if (excludeSeller.length) q.set('excludeSeller', excludeSeller.join(','));
+      if (excludeContactContains.length) q.set('excludeContactContains', excludeContactContains.join(','));
+      const res = await fetch(`/api/products?${q.toString()}`);
       if (!res.ok) throw new Error("Failed to load products");
-      return res.json() as Promise<Array<{ id: number; name: string; price: number; category: string; images?: string[] }>>;
+      return res.json() as Promise<Array<{ id: number; name: string; price: number; category: string; images?: string[]; createdAt?: string }>>;
     },
   });
 }
@@ -67,8 +75,8 @@ function useRecentBatches() {
     queryFn: async () => {
       const res = await fetch("/api/batches/recent");
       if (!res.ok) throw new Error("Failed to load batches");
-      return res.json() as Promise<Array<{ id: number; code: string; name: string; ageWeeks: number; chickens: number; status: string }>>
-    }
+      return res.json() as Promise<Array<{ id: number; code: string; name: string; ageWeeks: number; chickens: number; status: string }>>;
+    },
   });
 }
 
@@ -90,7 +98,85 @@ export default function Dashboard() {
   const { data: recentBatches } = useRecentBatches();
   const { data: alerts } = useRecentAlerts();
   const { data: recentOrders } = useRecentOrders();
-  const { data: postedPreview } = usePostedProductsPreview();
+  // current user (for excluding own posts)
+  const [userName, setUserName] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userPhone, setUserPhone] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('auth_user');
+      if (raw) {
+        const u = JSON.parse(raw);
+        if (u?.name) setUserName(String(u.name));
+        if (u?.email) setUserEmail(String(u.email));
+        if (u?.phone) setUserPhone(String(u.phone));
+      }
+    } catch {}
+  }, []);
+  const excludeSeller = [ 'You', ...(userName ? [userName] : []) ];
+  const excludeContactContains = [ ...(userEmail ? [userEmail] : []), ...(userPhone ? [userPhone] : []) ];
+  const { data: postedPreview } = usePostedProductsPreview({ excludeSeller, excludeContactContains });
+  // Full embedded list state (others' posts only)
+  const [othersQuery, setOthersQuery] = useState("");
+  const [othersCategory, setOthersCategory] = useState<(typeof productCategories)[number]>("All");
+  const [othersLimit] = useState(12);
+  const [othersOffset, setOthersOffset] = useState(0);
+  const [othersItems, setOthersItems] = useState<Array<{ id: number; name: string; price: number; category: string; images?: string[]; createdAt?: string }>>([]);
+  const [othersHasMore, setOthersHasMore] = useState(true);
+  const [othersSort, setOthersSort] = useState<'newest'|'price_low'|'price_high'>('newest');
+
+  const othersProductsQuery = useQuery({
+    queryKey: ["others-products", { othersQuery, othersCategory, othersOffset, othersLimit, excludeSeller, excludeContactContains }],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (othersQuery) params.set("search", othersQuery);
+      if (othersCategory) params.set("category", othersCategory);
+      params.set("limit", String(othersLimit));
+      params.set("offset", String(othersOffset));
+      if (excludeSeller.length) params.set("excludeSeller", excludeSeller.join(","));
+      if (excludeContactContains.length) params.set("excludeContactContains", excludeContactContains.join(","));
+      const res = await fetch(`/api/products?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load products");
+      return res.json() as Promise<Array<{ id: number; name: string; price: number; category: string; images?: string[] }>>;
+    },
+  });
+
+  useEffect(() => {
+    // reset when filters change
+    setOthersOffset(0);
+    setOthersItems([]);
+    setOthersHasMore(true);
+  }, [othersQuery, othersCategory, othersSort, excludeSeller.join(','), excludeContactContains.join(',')]);
+
+  useEffect(() => {
+    if (othersProductsQuery.data) {
+      setOthersItems(prev => (othersOffset === 0 ? othersProductsQuery.data! : [...prev, ...othersProductsQuery.data!]));
+      setOthersHasMore((othersProductsQuery.data || []).length === othersLimit);
+    }
+  }, [othersProductsQuery.data]);
+
+  const othersItemsSorted = useMemo(() => {
+    const arr = [...othersItems];
+    if (othersSort === 'price_low') {
+      arr.sort((a,b) => (a.price ?? 0) - (b.price ?? 0));
+    } else if (othersSort === 'price_high') {
+      arr.sort((a,b) => (b.price ?? 0) - (a.price ?? 0));
+    } else {
+      arr.sort((a,b) => {
+        const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+        const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+        return tb - ta;
+      });
+    }
+    return arr;
+  }, [othersItems, othersSort]);
+
+  function resolveImageUrl(url?: string) {
+    if (!url) return "";
+    if (/^(https?:)?\/\//i.test(url)) return url;
+    if (url.startsWith("/")) return url;
+    return `/uploads/${url}`;
+  }
   const [orderOpen, setOrderOpen] = useState(false);
   const [orderProduct, setOrderProduct] = useState<null | { id: number; name: string; price: number }>(null);
   const [orderQty, setOrderQty] = useState("1");
@@ -104,19 +190,21 @@ export default function Dashboard() {
             <h1 className="text-3xl font-bold text-foreground">Farm Dashboard</h1>
             <p className="text-muted-foreground">Welcome back! Here's your farm overview.</p>
           </div>
-          <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={() => navigate('/marketplace')}>
-              Browse Posted Products
-            </Button>
-            <Button onClick={() => navigate('/batches')} className="bg-gradient-primary hover:shadow-glow transition-smooth">
-              <Plus className="h-4 w-4 mr-2" />
-              New Batch
-            </Button>
-            <Button variant="outline" onClick={() => navigate('/logs')}>
-              <Calendar className="h-4 w-4 mr-2" />
-              Add Log
-            </Button>
-          </div>
+
+        {/* Posted nav in header actions */}
+        <div className="flex items-center gap-3">
+          <Button variant="outline" onClick={() => navigate('/posted')}>
+            Posted
+          </Button>
+          <Button onClick={() => navigate('/batches')} className="bg-gradient-primary hover:shadow-glow transition-smooth">
+            <Plus className="h-4 w-4 mr-2" />
+            New Batch
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/logs')}>
+            <Calendar className="h-4 w-4 mr-2" />
+            Add Log
+          </Button>
+        </div>
         </div>
 
         {/* Stats Grid */}
@@ -186,7 +274,7 @@ export default function Dashboard() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg font-semibold">Posted Orders</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => navigate('/marketplace')}>See Posted Products</Button>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/posted')}>See Posted Products</Button>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">

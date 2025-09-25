@@ -10,6 +10,7 @@ import { Search, ShoppingCart, Star, MapPin, Package, Bell } from "lucide-react"
 import { useEffect, useMemo, useState, useRef } from "react";
 import { toast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api";
 import { usePreferences } from "@/context/preferences";
 
 function resolveImageUrl(url: string): string {
@@ -50,7 +51,6 @@ export default function Marketplace() {
   const { formatCurrency } = usePreferences();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
-  const [othersOnly, setOthersOnly] = useState(true);
   const [openListDialog, setOpenListDialog] = useState(false);
   const [listingName, setListingName] = useState("");
   const [listingPrice, setListingPrice] = useState("");
@@ -74,6 +74,7 @@ export default function Marketplace() {
   const [products, setProducts] = useState<Product[]>([]);
 
   // Current user info from localStorage to filter out own posts
+  const [userId, setUserId] = useState<number | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userPhone, setUserPhone] = useState<string | null>(null);
@@ -82,6 +83,7 @@ export default function Marketplace() {
       const raw = localStorage.getItem('auth_user');
       if (raw) {
         const u = JSON.parse(raw);
+        if (u?.id != null) setUserId(Number(u.id));
         if (u?.name) setUserName(String(u.name));
         if (u?.email) setUserEmail(String(u.email));
         if (u?.phone) setUserPhone(String(u.phone));
@@ -93,32 +95,21 @@ export default function Marketplace() {
   const alertsQuery = useQuery({
     queryKey: ["recent-alerts"],
     queryFn: async () => {
-      const res = await fetch("/api/alerts/recent");
+      const res = await apiFetch("/api/alerts/recent");
       if (!res.ok) throw new Error("Failed to load alerts");
       return res.json() as Promise<Array<{ id: number; type: "info" | "warning" | "error"; message: string; time: string }>>;
     },
   });
 
   const productsQuery = useQuery({
-    queryKey: ["products", { query, category, offset, limit, othersOnly, userName, userEmail, userPhone }],
+    queryKey: ["products", { query, category, offset, limit }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (query) params.set("search", query);
       if (category) params.set("category", category);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
-      if (othersOnly) {
-        const sellers: string[] = [];
-        if (userName) sellers.push(userName);
-        // Also exclude optimistic 'You' posts
-        sellers.push('You');
-        if (sellers.length) params.set('excludeSeller', sellers.join(','));
-        const needles: string[] = [];
-        if (userEmail) needles.push(userEmail);
-        if (userPhone) needles.push(userPhone);
-        if (needles.length) params.set('excludeContactContains', needles.join(','));
-      }
-      const res = await fetch(`/api/products?${params.toString()}`);
+      const res = await apiFetch(`/api/products?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load products");
       return res.json() as Promise<Product[]>;
     },
@@ -163,26 +154,7 @@ export default function Marketplace() {
     setTimeout(() => URL.revokeObjectURL(url), 500);
   }
 
-  const filtered = useMemo(() => {
-    let arr = products;
-    if (othersOnly) {
-      const meName = (userName || '').toLowerCase();
-      const meEmail = (userEmail || '').toLowerCase();
-      const mePhone = (userPhone || '').toLowerCase();
-      const isMine = (p: Product) => {
-        const seller = (p.seller || '').toLowerCase();
-        const contact = (p.contact || '').toLowerCase();
-        return (
-          seller === 'you' ||
-          (meName && seller === meName) ||
-          (meEmail && contact.includes(meEmail)) ||
-          (mePhone && contact.includes(mePhone))
-        );
-      };
-      arr = arr.filter(p => !isMine(p));
-    }
-    return arr;
-  }, [products, othersOnly, userName, userEmail, userPhone]);
+  const filtered = useMemo(() => products, [products]);
 
   const [featuredIndex, setFeaturedIndex] = useState<Record<number, number>>({});
   const getImageByIndex = (p: Product) => {
@@ -265,7 +237,7 @@ export default function Marketplace() {
         setUploading(true);
         const form = new FormData();
         selectedFiles.forEach(f => form.append("images", f));
-        const up = await fetch("/api/uploads", { method: "POST", body: form });
+        const up = await apiFetch("/api/uploads", { method: "POST", body: form });
         if (!up.ok) throw new Error(await up.text());
         const data = await up.json();
         uploadedUrls = Array.isArray(data.urls) ? data.urls : [];
@@ -281,6 +253,8 @@ export default function Marketplace() {
         return Number.isFinite(n) ? n : 0;
       })();
 
+      const combinedContact = [listingContact, userEmail, userPhone].filter(Boolean).join(' ').trim() || undefined;
+
       const body = {
         name: listingName,
         price: priceNumber,
@@ -288,9 +262,11 @@ export default function Marketplace() {
         unit: listingUnit || "unit",
         inStock: true,
         type: listingType || undefined,
-        contact: listingContact || undefined,
+        contact: combinedContact,
         details: listingDetails || undefined,
         images: images.length ? images : undefined,
+        seller: 'You',
+        userId: userId ?? undefined,
       };
 
       const tempId = Date.now();
@@ -300,7 +276,7 @@ export default function Marketplace() {
         return [optimisticProduct, ...arr];
       });
 
-      const r = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const r = await apiFetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!r.ok) throw new Error(await r.text());
       const created = await r.json();
 
@@ -363,10 +339,7 @@ export default function Marketplace() {
                     {c}
                   </Button>
                 ))}
-                <label className="flex items-center gap-2 text-sm text-muted-foreground ml-2 select-none">
-                  <input type="checkbox" checked={othersOnly} onChange={(e)=>setOthersOnly(e.target.checked)} />
-                  Others only
-                </label>
+                {/* Marketplace shows all posts (including yours). */}
                 <div className="ml-auto flex items-center gap-2">
                   <div className="relative">
                     <Bell className="h-5 w-5 text-foreground" />
@@ -599,7 +572,7 @@ export default function Marketplace() {
               e.preventDefault();
               try {
                 const qty = Math.max(1, parseInt(orderQty || '1', 10) || 1);
-                const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId: orderProduct.id, quantity: qty, buyerContact: orderContact || undefined })});
+                const res = await apiFetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId: orderProduct.id, quantity: qty, buyerContact: orderContact || undefined })});
                 if (!res.ok) throw new Error(await res.text());
                 toast({ title: 'Order placed', description: `${orderProduct.name} x${qty}` });
                 setOrderOpen(false);

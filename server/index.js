@@ -87,6 +87,21 @@ async function sendSms(to, message) {
 app.use(cors());
 app.use(express.json());
 
+// Optional auth middleware: parse Authorization: Bearer <token>
+app.use((req, _res, next) => {
+  try {
+    const h = req.headers['authorization'] || '';
+    const m = /^Bearer\s+(.+)$/i.exec(String(h));
+    if (m) {
+      const token = m[1];
+      const payload = jwt.verify(token, JWT_SECRET);
+      // common fields: sub = user id, email
+      req.user = { id: payload.sub || payload.id, email: payload.email };
+    }
+  } catch {}
+  next();
+});
+
 // Setup uploads directory and static file serving
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -439,8 +454,43 @@ app.get('/api/products', async (req, res) => {
         andConds.push({ contact: { [sequelize.Op.notLike]: `%${needle}%` } });
       }
     }
+    const excludeSellerContainsRaw = req.query.excludeSellerContains ? String(req.query.excludeSellerContains) : '';
+    const excludeSellerContains = excludeSellerContainsRaw.split(',').map(v=>v.trim().toLowerCase()).filter(Boolean);
+    if (excludeSellerContains.length > 0) {
+      for (const needle of excludeSellerContains) {
+        andConds.push(
+          sequelize.where(
+            sequelize.fn('LOWER', sequelize.col('seller')),
+            { [sequelize.Op.notLike]: `%${needle}%` }
+          )
+        );
+      }
+    }
+    // Also exclude by current user's email for legacy rows without userId
+    if (req.user && req.user.email) {
+      const email = String(req.user.email).toLowerCase();
+      if (email) {
+        andConds.push(
+          sequelize.where(
+            sequelize.fn('LOWER', sequelize.col('contact')),
+            { [sequelize.Op.notLike]: `%${email}%` }
+          )
+        );
+        andConds.push(
+          sequelize.where(
+            sequelize.fn('LOWER', sequelize.col('seller')),
+            { [sequelize.Op.notLike]: `%${email}%` }
+          )
+        );
+      }
+    }
     if (andConds.length > 0) {
       where[sequelize.Op.and] = (where[sequelize.Op.and] || []).concat(andConds);
+    }
+    // Auto-exclude current user's products unless includeMine=1
+    if (req.user && String(req.query.includeMine) !== '1') {
+      const uid = Number(req.user.id);
+      if (!Number.isNaN(uid)) where.userId = { [sequelize.Op.ne]: uid };
     }
     const limit = Number(req.query.limit || 100);
     const offset = Number(req.query.offset || 0);
@@ -466,9 +516,13 @@ app.post('/api/uploads', upload.array('images', 10), async (req, res) => {
 
 app.post('/api/products', async (req, res) => {
   try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
     const { name, price, category = 'General', unit = 'unit', inStock = true, seller, location, description, images, type, contact, details } = req.body;
     if (!name || price == null) return res.status(400).json({ error: 'name and price are required' });
-    const p = await Product.create({ name, price, category, unit, inStock, seller, location, description, images, type, contact, details });
+    const userId = req.user && req.user.id ? Number(req.user.id) : null;
+    const p = await Product.create({ name, price, category, unit, inStock, seller, location, description, images, type, contact, details, userId });
     res.status(201).json(p);
   } catch (e) {
     console.error(e);

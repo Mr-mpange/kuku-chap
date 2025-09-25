@@ -80,6 +80,10 @@ export const Product = sequelize.define('Product', {
       else this.setDataValue('images', JSON.stringify([]));
     }
   },
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 }, {
   tableName: 'products'
 });
