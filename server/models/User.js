@@ -26,6 +26,12 @@ export const User = sequelize.define('User', {
     type: DataTypes.STRING,
     allowNull: true,
     field: 'password_hash'
+  },
+  twoFAEnabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'twofa_enabled'
   }
 }, {
   tableName: 'users'

@@ -15,7 +15,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 
@@ -77,6 +77,73 @@ export default function Reports() {
   // Provide safe data for charts to avoid runtime errors and blank screens
   const productionData = production ?? [];
   const expenseBreakdown = expenses ?? [];
+
+  // -------- Export helpers --------
+  function downloadText(filename: string, text: string, mime = 'text/plain;charset=utf-8;') {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  function toCSV(rows: (string | number | boolean)[][]) {
+    return rows.map(r => r.map(v => {
+      const s = String(v ?? '');
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }).join(',')).join('\n');
+  }
+
+  const summaryRows = useMemo(() => {
+    if (!summary) return [['metric','value']];
+    return [
+      ['revenue', summary.revenue],
+      ['eggsTotal', summary.eggsTotal],
+      ['expensesTotal', summary.expensesTotal],
+    ];
+  }, [summary]);
+
+  function exportAllCSV() {
+    const sections: string[] = [];
+    sections.push('# Summary');
+    sections.push(toCSV([['metric','value'], ...summaryRows.slice(1)]));
+    sections.push('\n# Production');
+    sections.push(toCSV([['date','eggs','feed','revenue','name'], ...productionData.map(p => [p.date, p.eggs, p.feed, p.revenue, p.name]) ]));
+    sections.push('\n# Expense Breakdown');
+    sections.push(toCSV([['name','value'], ...expenseBreakdown.map(e => [e.name, e.value]) ]));
+    sections.push('\n# Batch Performance');
+    sections.push(toCSV([['batch','eggs','efficiency','health'], ...(performance ?? []).map(b => [b.batch, b.eggs, b.efficiency, b.health]) ]));
+    downloadText('farm-report.csv', sections.join('\n'));
+  }
+
+  function exportProductionCSV() {
+    const csv = toCSV([['date','eggs','feed','revenue','name'], ...productionData.map(p => [p.date, p.eggs, p.feed, p.revenue, p.name])]);
+    downloadText('production-data.csv', csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportFinancialCSV() {
+    const csv = toCSV([['category','amount'], ...expenseBreakdown.map(e => [e.name, e.value])]);
+    downloadText('financial-report.csv', csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportSummaryHTML() {
+    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>Monthly Summary</title>
+      <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:24px;color:#111}
+      h1{margin:0 0 16px} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background:#f6f6f6}</style>
+      </head><body>
+      <h1>Monthly Summary</h1>
+      <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
+      ${(summaryRows.slice(1)).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+      </tbody></table>
+      <p style="margin-top:16px;color:#666">Tip: Open this file and Print to PDF for a nicely formatted report.</p>
+      </body></html>`;
+    downloadText('monthly-summary.html', html, 'text/html;charset=utf-8;');
+  }
   return (
     <MainLayout>
       <div className="p-6 lg:p-8 space-y-8">
@@ -98,9 +165,9 @@ export default function Reports() {
                 <SelectItem value="year">This Year</SelectItem>
               </SelectContent>
             </Select>
-            <Button onClick={()=>toast({ title: 'Export started', description: 'Generating report (demo)...' })} className="bg-gradient-primary hover:shadow-glow transition-smooth">
+            <Button onClick={exportAllCSV} className="bg-gradient-primary hover:shadow-glow transition-smooth">
               <Download className="h-4 w-4 mr-2" />
-              Export Report
+              Export Report (CSV)
             </Button>
           </div>
         </div>
@@ -326,17 +393,17 @@ export default function Reports() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Monthly Summary (PDF) — demo' })}>
+              <Button variant="outline" className="justify-start" onClick={exportSummaryHTML}>
                 <Calendar className="h-4 w-4 mr-2" />
-                Monthly Summary (PDF)
+                Monthly Summary (Print/PDF)
               </Button>
-              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Production Data (CSV) — demo' })}>
+              <Button variant="outline" className="justify-start" onClick={exportProductionCSV}>
                 <BarChart3 className="h-4 w-4 mr-2" />
                 Production Data (CSV)
               </Button>
-              <Button variant="outline" className="justify-start" onClick={()=>toast({ title: 'Exporting', description: 'Financial Report (Excel) — demo' })}>
+              <Button variant="outline" className="justify-start" onClick={exportFinancialCSV}>
                 <DollarSign className="h-4 w-4 mr-2" />
-                Financial Report (Excel)
+                Financial Report (CSV)
               </Button>
             </div>
           </CardContent>

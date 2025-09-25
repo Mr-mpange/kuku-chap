@@ -18,11 +18,14 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-function useBatches() {
+function useBatches(params: { search: string; status: string }) {
   return useQuery({
-    queryKey: ["batches"],
+    queryKey: ["batches", params],
     queryFn: async () => {
-      const res = await fetch("/api/batches");
+      const qs = new URLSearchParams();
+      if (params.search) qs.set('search', params.search);
+      if (params.status) qs.set('status', params.status);
+      const res = await fetch(`/api/batches?${qs.toString()}`);
       if (!res.ok) throw new Error("Failed to load batches");
       return res.json() as Promise<Array<{ id: number; code: string; name: string; breed?: string; ageWeeks: number; chickens: number; status: string }>>;
     }
@@ -40,7 +43,9 @@ export default function Batches() {
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
 
-  const { data: batches } = useBatches();
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<string>("All");
+  const { data: batches } = useBatches({ search, status });
 
   const createMutation = useMutation({
     mutationFn: async (payload: { code: string; name: string; breed?: string; chickens: number }) => {
@@ -97,12 +102,16 @@ export default function Batches() {
                 <Input 
                   placeholder="Search batches..."
                   className="pl-10"
+                  value={search}
+                  onChange={(e)=>setSearch(e.target.value)}
                 />
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm">All Status</Button>
-                <Button variant="outline" size="sm">Active</Button>
-                <Button variant="outline" size="sm">Monitoring</Button>
+                {['All','Healthy','Monitoring'].map(s => (
+                  <Button key={s} variant={status===s? 'default':'outline'} size="sm" onClick={()=>setStatus(s)}>
+                    {s}
+                  </Button>
+                ))}
               </div>
             </div>
           </CardContent>

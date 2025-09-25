@@ -3,6 +3,8 @@ import { StatsCard } from "@/components/dashboard/stats-card";
 import { ProductionChart } from "@/components/dashboard/production-chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { 
   Egg, 
@@ -14,17 +16,48 @@ import {
   Activity
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { usePreferences } from "@/context/preferences";
+import { AspectRatio } from "@/components/ui/aspect-ratio";
 
 function useDashboardStats() {
-  return useQuery({
+  return useQuery<{
+    totalChickens: number;
+    dailyEggs: number;
+    monthlyRevenue: number;
+    mortalityRate: number;
+    changes: Record<string, string>;
+  }>({
     queryKey: ["dashboard-stats"],
     queryFn: async () => {
       const res = await fetch("/api/stats");
       if (!res.ok) throw new Error("Failed to load stats");
-      return res.json() as Promise<{ totalChickens: number; dailyEggs: number; monthlyRevenue: number; mortalityRate: number; changes: Record<string,string> }>
-    }
+      return res.json();
+    },
+  });
+}
+
+function usePostedProductsPreview() {
+  return useQuery({
+    queryKey: ["posted-products-preview"],
+    queryFn: async () => {
+      const res = await fetch("/api/products?limit=4&offset=0");
+      if (!res.ok) throw new Error("Failed to load products");
+      return res.json() as Promise<Array<{ id: number; name: string; price: number; category: string; images?: string[] }>>;
+    },
+  });
+}
+
+function useRecentOrders() {
+  return useQuery({
+    queryKey: ["recent-orders"],
+    queryFn: async () => {
+      const res = await fetch("/api/orders?limit=8&offset=0");
+      if (!res.ok) throw new Error("Failed to load orders");
+      return res.json() as Promise<Array<{ id: number; productId: number; quantity: number; unitPrice: number; buyerContact?: string | null; status: string; createdAt?: string }>>;
+    },
   });
 }
 
@@ -56,6 +89,12 @@ export default function Dashboard() {
   const { data: stats } = useDashboardStats();
   const { data: recentBatches } = useRecentBatches();
   const { data: alerts } = useRecentAlerts();
+  const { data: recentOrders } = useRecentOrders();
+  const { data: postedPreview } = usePostedProductsPreview();
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [orderProduct, setOrderProduct] = useState<null | { id: number; name: string; price: number }>(null);
+  const [orderQty, setOrderQty] = useState("1");
+  const [orderContact, setOrderContact] = useState("");
   return (
     <MainLayout showFooter={false}>
       <div className="p-6 lg:p-8 space-y-8">
@@ -66,6 +105,9 @@ export default function Dashboard() {
             <p className="text-muted-foreground">Welcome back! Here's your farm overview.</p>
           </div>
           <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={() => navigate('/marketplace')}>
+              Browse Posted Products
+            </Button>
             <Button onClick={() => navigate('/batches')} className="bg-gradient-primary hover:shadow-glow transition-smooth">
               <Plus className="h-4 w-4 mr-2" />
               New Batch
@@ -138,6 +180,76 @@ export default function Dashboard() {
               ))}
             </CardContent>
           </Card>
+
+          {/* Posted Orders */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg font-semibold">Posted Orders</CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/marketplace')}>See Posted Products</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(recentOrders || []).map((o) => (
+                <div key={o.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth">
+                  <div className="w-16 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                    #{o.productId}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">Order #{o.id}</span>
+                      <Badge variant="secondary" className="text-xs">{o.status}</Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground">Qty {o.quantity} • {formatCurrency(o.unitPrice)}</div>
+                    {o.buyerContact && (
+                      <div className="text-xs text-muted-foreground truncate">{o.buyerContact}</div>
+                    )}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={()=>navigate('/orders')}>View</Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Posted Products (Preview) */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg font-semibold">Posted Products</CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/marketplace')}>View All</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(postedPreview || []).map((p) => (
+                <div key={p.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth">
+                  <div className="w-16 h-16 rounded-full overflow-hidden border bg-muted">
+                    <AspectRatio ratio={1}>
+                      {Array.isArray(p.images) && p.images.length > 0 ? (
+                        <img
+                          src={(p.images[0] || '').startsWith('http') || (p.images[0] || '').startsWith('/') ? (p.images[0] as string) : `/uploads/${p.images[0]}`}
+                          alt={p.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-muted-foreground">🖼️</div>
+                      )}
+                    </AspectRatio>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">{p.name}</span>
+                      <Badge variant="secondary" className="text-xs">{p.category}</Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground">{formatCurrency(p.price)}</div>
+                  </div>
+                  <Button size="sm" className="bg-gradient-primary" onClick={()=>navigate('/marketplace')}>Order</Button>
+                </div>
+              ))}
+              {(!postedPreview || postedPreview.length === 0) && (
+                <div className="text-sm text-muted-foreground">No posted products yet.</div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Alerts */}
@@ -168,6 +280,48 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+      {/* Quick Order Dialog */}
+      <Dialog open={orderOpen} onOpenChange={setOrderOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Place Order</DialogTitle>
+          </DialogHeader>
+          {orderProduct && (
+            <form className="space-y-3" onSubmit={async (e)=>{
+              e.preventDefault();
+              try {
+                const qty = Math.max(1, parseInt(orderQty || '1', 10) || 1);
+                const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId: orderProduct.id, quantity: qty, buyerContact: orderContact || undefined }) });
+                if (!res.ok) throw new Error(await res.text());
+                toast({ title: 'Order placed', description: `${orderProduct.name} x${qty}` });
+                setOrderOpen(false);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : 'Could not place order';
+                toast({ title: 'Order failed', description: msg });
+              }
+            }}>
+              <div>
+                <div className="text-sm text-muted-foreground">Product</div>
+                <div className="font-medium">{orderProduct.name}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-sm text-muted-foreground">Quantity</label>
+                  <Input type="number" min={1} value={orderQty} onChange={(e)=>setOrderQty(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Contact (optional)</label>
+                  <Input value={orderContact} onChange={(e)=>setOrderContact(e.target.value)} placeholder="Phone or email" />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={()=>setOrderOpen(false)}>Cancel</Button>
+                <Button type="submit" className="bg-gradient-primary">Confirm Order</Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }

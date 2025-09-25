@@ -12,13 +12,77 @@ import { Alert } from './models/Alert.js';
 import mysql from 'mysql2/promise';
 import { User } from './models/User.js';
 import fetch from 'node-fetch';
+import africastalking from 'africastalking';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Product } from './models/Product.js';
+import { Order } from './models/Order.js';
+import { OtpCode } from './models/OtpCode.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
+// Initialize Africa's Talking client if configured (fallback provider)
+const atClient = process.env.AT_API_KEY
+  ? africastalking({ apiKey: process.env.AT_API_KEY, username: process.env.AT_USERNAME || 'sandbox' })
+  : null;
+
+// Briq configuration (primary provider)
+const BRIQ_BASE_URL = process.env.BRIQ_BASE_URL || 'https://api.briqsms.com';
+const BRIQ_API_KEY = process.env.BRIQ_API_KEY || '';
+const BRIQ_SENDER_ID = process.env.BRIQ_SENDER_ID || '';
+const SMS_FAKE = String(process.env.SMS_FAKE || '') === '1';
+const SMS_TIMEOUT_MS = Number(process.env.SMS_TIMEOUT_MS || 10000);
+
+async function sendSmsViaBriq(to, message) {
+  const recipients = Array.isArray(to) ? to : [to];
+  if (!BRIQ_API_KEY) throw new Error('BRIQ_API_KEY not configured');
+  if (SMS_FAKE) {
+    console.log('[SMS_FAKE] Briq send simulated:', { to: recipients, message, from: BRIQ_SENDER_ID });
+    return { ok: true, provider: 'briq', simulated: true };
+  }
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), SMS_TIMEOUT_MS);
+  try {
+    const url = `${BRIQ_BASE_URL.replace(/\/$/, '')}/sms/send`;
+    const body = { to: recipients, message, from: BRIQ_SENDER_ID || undefined };
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${BRIQ_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      throw new Error(`Briq HTTP ${resp.status}: ${txt}`);
+    }
+    const data = await resp.json().catch(() => ({}));
+    return { ok: true, provider: 'briq', data };
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function sendSms(to, message) {
+  // Prefer Briq if configured
+  if (BRIQ_API_KEY) {
+    return await sendSmsViaBriq(to, message);
+  }
+  // Fallback to Africa's Talking if configured
+  if (atClient) {
+    const recipients = Array.isArray(to) ? to : [to];
+    const from = process.env.AT_SENDER_ID; // optional; omit for sandbox
+    const options = from ? { to: recipients, message, from } : { to: recipients, message };
+    const data = await atClient.SMS.send(options);
+    return { ok: true, provider: 'africastalking', data };
+  }
+  throw new Error('No SMS provider configured');
+}
+
+// DB-backed OTP codes via OtpCode model
 
 app.use(cors());
 app.use(express.json());
@@ -28,6 +92,187 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// ------------------------------
+// Orders
+// ------------------------------
+app.post('/api/orders', async (req, res) => {
+  try {
+    const { productId, quantity = 1, buyerContact } = req.body || {};
+    if (!productId) return res.status(400).json({ error: 'productId is required' });
+    const product = await Product.findByPk(productId);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const unitPrice = Number(product.price || 0);
+    const order = await Order.create({ productId, quantity: Number(quantity || 1), unitPrice, buyerContact: buyerContact || null, status: 'pending' });
+    res.status(201).json(order);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to create order' });
+  }
+});
+
+app.get('/api/orders', async (req, res) => {
+  try {
+    const limit = Number(req.query.limit || 100);
+    const offset = Number(req.query.offset || 0);
+    const items = await Order.findAll({ limit, offset, order: [['createdAt','DESC']] });
+    res.json(items);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+app.patch('/api/orders/:id', async (req, res) => {
+  try {
+    const order = await Order.findByPk(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    const { status, buyerContact } = req.body || {};
+    if (status) order.status = String(status);
+    if (buyerContact !== undefined) order.buyerContact = buyerContact || null;
+    await order.save();
+    res.json(order);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// Resend login OTP
+app.post('/api/auth/resend-otp', async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    if (!BRIQ_API_KEY && !atClient) return res.status(500).json({ error: '2FA requires SMS provider', detail: 'Configure BRIQ_API_KEY or AT_API_KEY/AT_USERNAME' });
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.twoFAEnabled) return res.status(400).json({ error: '2FA not enabled' });
+    const phone = (user.phone || '').trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(500).json({ error: '2FA phone invalid' });
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const ttlSec = Number(process.env.OTP_TTL_SECONDS || 60);
+    await OtpCode.destroy({ where: { phone } });
+    await OtpCode.create({ phone, code, expiresAt: new Date(Date.now() + ttlSec * 1000) });
+    const message = process.env.OTP_MESSAGE_TEMPLATE
+      ? String(process.env.OTP_MESSAGE_TEMPLATE).replace(/\{code\}/g, code)
+      : `Your ChickTrack verification code is ${code}`;
+    try {
+      const smsResp = await sendSms([phone], message);
+      return res.json({ ok: true, resent: true, provider: smsResp.provider });
+    } catch (err) {
+      console.error('Auth resend-otp failed:', err?.message || err);
+      return res.status(500).json({ error: 'Resend OTP failed' });
+    }
+  } catch (e) {
+    console.error('Auth resend-otp failed:', e?.message || e);
+    return res.status(500).json({ error: 'Resend OTP failed' });
+  }
+});
+
+// ------------------------------
+// OTP via SMS provider (Briq preferred)
+//------------------------------
+app.post('/api/otp/request', async (req, res) => {
+  try {
+    if (!BRIQ_API_KEY && !atClient) return res.status(500).json({ error: 'SMS provider not configured', detail: 'Set BRIQ_API_KEY or AT_API_KEY/AT_USERNAME' });
+    const { to } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'to is required' });
+    const phone = (Array.isArray(to) ? to[0] : String(to)).trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({ error: 'Invalid phone format', detail: 'Use international format like +2557XXXXXXXX' });
+    // Generate 6-digit code
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const ttlSec = Number(process.env.OTP_TTL_SECONDS || 60); // default 60 seconds
+    const expiresAt = new Date(Date.now() + ttlSec * 1000);
+    // Upsert-like: delete existing codes for this phone and insert new
+    await OtpCode.destroy({ where: { phone } });
+    await OtpCode.create({ phone, code, expiresAt });
+
+    const message = process.env.OTP_MESSAGE_TEMPLATE
+      ? String(process.env.OTP_MESSAGE_TEMPLATE).replace(/\{code\}/g, code)
+      : `Your ChickTrack verification code is ${code}`;
+    try {
+      const smsResp = await sendSms([phone], message);
+      res.json({ ok: true, sent: true, ttlSeconds: ttlSec, provider: smsResp.provider, data: smsResp.data });
+    } catch (err) {
+      console.error('OTP request failed:', err?.message || err);
+      return res.status(500).json({ error: 'OTP request failed', detail: err?.message || 'Unknown error' });
+    }
+  } catch (e) {
+    console.error('OTP request failed:', e?.message || e);
+    return res.status(500).json({ error: 'OTP request failed', detail: e?.message || 'Unknown error' });
+  }
+});
+
+// Complete login after OTP when 2FA is enabled
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { userId, code } = req.body || {};
+    if (!userId || !code) return res.status(400).json({ error: 'userId and code are required' });
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.twoFAEnabled) return res.status(400).json({ error: '2FA not enabled' });
+    const phone = (user.phone || '').trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(500).json({ error: '2FA phone invalid' });
+    const rec = await OtpCode.findOne({ where: { phone } });
+    if (!rec) return res.status(400).json({ error: 'No OTP pending' });
+    if (new Date() > rec.expiresAt) { await rec.destroy(); return res.status(400).json({ error: 'Code expired' }); }
+    if (String(code).trim() !== String(rec.code)) return res.status(400).json({ error: 'Invalid code' });
+    await rec.destroy();
+    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, twoFAEnabled: user.twoFAEnabled } });
+  } catch (e) {
+    console.error('Auth verify-otp failed:', e?.message || e);
+    return res.status(500).json({ error: 'Verify OTP failed' });
+  }
+});
+
+// Enable/disable 2FA and set phone (server-side)
+app.post('/api/users/:id/twofa', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled, phone } = req.body || {};
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (enabled) {
+      if (!/^\+[1-9]\d{7,14}$/.test(String(phone || '').trim())) {
+        return res.status(400).json({ error: 'Invalid phone format', detail: 'Use +countrycode format' });
+      }
+      user.phone = String(phone).trim();
+      user.twoFAEnabled = true;
+    } else {
+      user.twoFAEnabled = false;
+    }
+    await user.save();
+    res.json({ ok: true, user: { id: user.id, twoFAEnabled: user.twoFAEnabled, phone: user.phone } });
+  } catch (e) {
+    console.error('Update twoFA failed:', e?.message || e);
+    res.status(500).json({ error: 'Update twoFA failed' });
+  }
+});
+
+app.post('/api/otp/verify', async (req, res) => {
+  try {
+    const { to, code } = req.body || {};
+    if (!to || !code) return res.status(400).json({ error: 'to and code are required' });
+    const phone = (Array.isArray(to) ? to[0] : String(to)).trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({ error: 'Invalid phone format', detail: 'Use international format like +2557XXXXXXXX' });
+    const rec = await OtpCode.findOne({ where: { phone } });
+    if (!rec) return res.status(400).json({ error: 'No OTP requested for this number' });
+    if (new Date() > rec.expiresAt) {
+      await rec.destroy();
+      return res.status(400).json({ error: 'Code expired' });
+    }
+    if (String(code).trim() !== String(rec.code)) {
+      return res.status(400).json({ error: 'Invalid code' });
+    }
+    // One-time use
+    await rec.destroy();
+    return res.json({ ok: true, verified: true });
+  } catch (e) {
+    console.error('OTP verify failed:', e?.message || e);
+    return res.status(500).json({ error: 'OTP verify failed', detail: e?.message || 'Unknown error' });
+  }
+});
 app.use('/uploads', express.static(UPLOAD_DIR));
 const upload = multer({ dest: UPLOAD_DIR });
 
@@ -118,6 +363,8 @@ app.get('/api/stats', async (_req, res) => {
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const end = new Date(start); end.setDate(end.getDate() + 1);
   const dailyEggs = await ProductionLog.sum('eggs', { where: { date: { [sequelize.Op.gte]: start, [sequelize.Op.lt]: end } } }).catch(() => 0) || 0;
+  const feedKgToday = await ProductionLog.sum('feedKg', { where: { date: { [sequelize.Op.gte]: start, [sequelize.Op.lt]: end } } }).catch(() => 0) || 0;
+  const deathsToday = await ProductionLog.sum('deaths', { where: { date: { [sequelize.Op.gte]: start, [sequelize.Op.lt]: end } } }).catch(() => 0) || 0;
   // Very simple mocked finance calc based on eggs
   const monthlyStart = new Date(today.getFullYear(), today.getMonth(), 1);
   const monthlyEggs = await ProductionLog.sum('eggs', { where: { date: { [sequelize.Op.gte]: monthlyStart } } }).catch(() => 0) || 0;
@@ -126,6 +373,8 @@ app.get('/api/stats', async (_req, res) => {
   res.json({
     totalChickens,
     dailyEggs,
+    feedKgToday,
+    deathsToday,
     monthlyRevenue,
     mortalityRate,
     changes: { totalChickens: '+12%', dailyEggs: '+5%', monthlyRevenue: '+18%', mortalityRate: '-0.3%' }
@@ -176,6 +425,23 @@ app.get('/api/products', async (req, res) => {
         { description: { [sequelize.Op.like]: `%${s}%` } },
       ];
     }
+    // Exclusions for "others only" view
+    const andConds = [];
+    const excludeSellerRaw = req.query.excludeSeller ? String(req.query.excludeSeller) : '';
+    const excludeSellers = excludeSellerRaw.split(',').map(v=>v.trim()).filter(Boolean);
+    if (excludeSellers.length > 0) {
+      andConds.push({ seller: { [sequelize.Op.notIn]: excludeSellers } });
+    }
+    const excludeContactRaw = req.query.excludeContactContains ? String(req.query.excludeContactContains) : '';
+    const excludeContacts = excludeContactRaw.split(',').map(v=>v.trim()).filter(Boolean);
+    if (excludeContacts.length > 0) {
+      for (const needle of excludeContacts) {
+        andConds.push({ contact: { [sequelize.Op.notLike]: `%${needle}%` } });
+      }
+    }
+    if (andConds.length > 0) {
+      where[sequelize.Op.and] = (where[sequelize.Op.and] || []).concat(andConds);
+    }
     const limit = Number(req.query.limit || 100);
     const offset = Number(req.query.offset || 0);
     const items = await Product.findAll({ where, limit, offset, order: [['createdAt','DESC']] });
@@ -211,71 +477,19 @@ app.post('/api/products', async (req, res) => {
 });
 
 // ------------------------------
-// SMS (Briq) Proxy
+// SMS Send Proxy (Briq preferred, AT fallback)
 // ------------------------------
 app.post('/api/sms/send', async (req, res) => {
   try {
-    const baseUrl = process.env.BRIQ_BASE_URL;
-    const apiKey = process.env.BRIQ_API_KEY;
-    const senderId = process.env.BRIQ_SENDER_ID;
-    const smsPath = (process.env.BRIQ_SMS_PATH || '/sms/send').replace(/\s+/g, '');
-    const authHeaderKey = process.env.BRIQ_AUTH_HEADER_KEY || 'Authorization';
-    const useFake = process.env.SMS_FAKE === '1' || process.env.BRIQ_USE_MOCK === '1';
     const { to, message } = req.body || {};
     if (!to || !message) return res.status(400).json({ error: 'to and message are required' });
-    if (useFake) {
-      console.log(`[SMS_FAKE] to=${to} from=${senderId || 'N/A'} msg=${message}`);
-      return res.json({ ok: true, fake: true });
+    try {
+      const smsResp = await sendSms(to, message);
+      return res.json({ ok: true, provider: smsResp.provider, data: smsResp.data });
+    } catch (err) {
+      console.error('SMS send failed:', err?.message || err);
+      return res.status(500).json({ error: 'SMS send failed', detail: err?.message || 'Unknown error' });
     }
-    if (!baseUrl || !apiKey) return res.status(500).json({ error: 'Briq is not configured' });
-
-    // Attempt a generic Briq-style request; adjust path/fields to match your account docs if needed
-    const url = `${baseUrl.replace(/\/$/, '')}${smsPath.startsWith('/') ? smsPath : `/${smsPath}`}`;
-    const body = { to, message, from: senderId };
-    async function sendWithRetry(attempt = 1) {
-      const controller = new AbortController();
-      const timeoutMs = Number(process.env.SMS_TIMEOUT_MS || 10000);
-      const t = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const headers = {
-          'Content-Type': 'application/json',
-        };
-        // Allow custom header key for API key, fallback to Bearer
-        if (authHeaderKey.toLowerCase() === 'authorization') {
-          headers['Authorization'] = `Bearer ${apiKey}`;
-        } else {
-          headers[authHeaderKey] = apiKey;
-        }
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        clearTimeout(t);
-        return response;
-      } catch (err) {
-        clearTimeout(t);
-        if (attempt < 2) {
-          console.warn(`Briq SMS attempt ${attempt} failed, retrying...`, err?.code || err?.name || '');
-          return sendWithRetry(attempt + 1);
-        }
-        const msg = err && (err.code === 'ENOTFOUND' ? `DNS lookup failed for ${new URL(url).hostname}` : (err?.message || 'Network error'));
-        console.error('Briq SMS fetch error:', err);
-        return { ok: false, _networkError: true, _detail: msg };
-      }
-    }
-    const r = await sendWithRetry();
-    if (!r.ok) {
-      if (r._networkError) {
-        return res.status(502).json({ error: 'Briq SMS network error', detail: r._detail });
-      }
-      const t = await r.text();
-      console.error('Briq SMS error:', t);
-      return res.status(502).json({ error: 'Briq SMS failed', detail: t });
-    }
-    const data = await r.json().catch(()=>({ ok: true }));
-    res.json({ ok: true, data });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'SMS send failed' });
@@ -289,7 +503,18 @@ app.get('/api/batches', async (req, res) => {
   try {
     const limit = Number(req.query.limit || 100);
     const offset = Number(req.query.offset || 0);
-    const batches = await Batch.findAll({ limit, offset, order: [['createdAt', 'DESC']] });
+    const where = {};
+    const { search, status } = req.query;
+    if (status && String(status) !== 'All') where.status = status;
+    if (search) {
+      const s = String(search).trim();
+      if (s) where[sequelize.Op.or] = [
+        { name: { [sequelize.Op.like]: `%${s}%` } },
+        { breed: { [sequelize.Op.like]: `%${s}%` } },
+        { code: { [sequelize.Op.like]: `%${s}%` } },
+      ];
+    }
+    const batches = await Batch.findAll({ where, limit, offset, order: [['createdAt', 'DESC']] });
     res.json(batches);
   } catch (e) {
     console.error(e);
@@ -453,8 +678,30 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user || !user.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    // If server-side 2FA enabled, send OTP and require verification
+    if (user.twoFAEnabled) {
+      if (!BRIQ_API_KEY && !atClient) return res.status(500).json({ error: '2FA requires SMS provider', detail: 'Configure BRIQ_API_KEY or AT_API_KEY/AT_USERNAME' });
+      const phone = (user.phone || '').trim();
+      if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(500).json({ error: '2FA phone invalid', detail: 'Stored phone must be in +countrycode format' });
+      // Generate and send OTP (reuse OTP logic)
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const ttlSec = Number(process.env.OTP_TTL_SECONDS || 60);
+      await OtpCode.destroy({ where: { phone } });
+      await OtpCode.create({ phone, code, expiresAt: new Date(Date.now() + ttlSec * 1000) });
+      const message = process.env.OTP_MESSAGE_TEMPLATE
+        ? String(process.env.OTP_MESSAGE_TEMPLATE).replace(/\{code\}/g, code)
+        : `Your ChickTrack verification code is ${code}`;
+      try {
+        await sendSms([phone], message);
+      } catch (e) {
+        console.error('Login 2FA OTP send failed:', e?.message || e);
+        return res.status(502).json({ error: 'Failed to send OTP' });
+      }
+      // Do not issue token yet, require OTP verification
+      return res.json({ requireOtp: true, userId: user.id, phoneMasked: phone.replace(/^(\+\d{3})\d+(\d{2})$/, '$1****$2') });
+    }
     const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, twoFAEnabled: user.twoFAEnabled } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Login failed' });

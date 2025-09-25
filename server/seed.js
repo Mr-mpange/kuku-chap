@@ -3,6 +3,7 @@ import { sequelize } from './lib/db.js';
 import { Batch } from './models/Batch.js';
 import { ProductionLog } from './models/ProductionLog.js';
 import { Alert } from './models/Alert.js';
+import { Product } from './models/Product.js';
 import mysql from 'mysql2/promise';
 
 async function ensureDatabase() {
@@ -48,6 +49,51 @@ async function seed() {
     { type: 'warning', message: 'Feed levels low in Coop A', time: '2 hours ago' },
     { type: 'info', message: 'Vaccination due for Batch Beta', time: '1 day ago' },
     { type: 'info', message: 'New order received for 300 eggs', time: '3 days ago' },
+  ]);
+
+  // Sample marketplace products (use external images to avoid local upload dependency)
+  await Product.bulkCreate([
+    {
+      name: 'Fresh Eggs (Dozen)',
+      category: 'Eggs',
+      price: 3.5,
+      unit: 'dozen',
+      inStock: true,
+      seller: 'Coop A',
+      location: 'Nairobi',
+      description: 'Farm fresh free-range eggs',
+      type: 'Organic',
+      images: [
+        'https://images.unsplash.com/photo-1517959105821-eaf2591984dc?q=80&w=800&auto=format&fit=crop',
+        'https://images.unsplash.com/photo-1587486913047-1fa3dd8605b0?q=80&w=800&auto=format&fit=crop'
+      ],
+    },
+    {
+      name: 'Layer Feed 50kg',
+      category: 'Feed',
+      price: 28,
+      unit: 'bag',
+      inStock: true,
+      seller: 'AgriSupplies Ltd',
+      location: 'Arusha',
+      description: 'Balanced layer mash for high production',
+      images: [
+        'https://images.unsplash.com/photo-1606923829579-0cb981a83e2d?q=80&w=800&auto=format&fit=crop'
+      ],
+    },
+    {
+      name: 'Point-of-Lay Pullets',
+      category: 'Live Birds',
+      price: 9.99,
+      unit: 'bird',
+      inStock: true,
+      seller: 'Green Farm',
+      location: 'Dar es Salaam',
+      description: 'Healthy pullets ready to start laying',
+      images: [
+        'https://images.unsplash.com/photo-1502716119720-b23a93e5fe1b?q=80&w=800&auto=format&fit=crop'
+      ],
+    },
   ]);
 
   console.log('Seed completed');

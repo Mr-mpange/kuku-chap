@@ -3,26 +3,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { 
-  Search, 
-  ShoppingCart, 
-  Star,
-  MapPin,
-  Package
-} from "lucide-react";
-import { useMemo, useState } from "react";
+import { Search, ShoppingCart, Star, MapPin, Package, Bell } from "lucide-react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { toast } from "@/hooks/use-toast";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePreferences } from "@/context/preferences";
 
 function resolveImageUrl(url: string): string {
   if (!url) return "";
-  if (/^(https?:)?\/\//i.test(url)) return url; // absolute http(s)
-  if (/^data:/i.test(url)) return url; // base64 data URL
-  if (url.startsWith("/")) return url; // root-relative
-  // treat as uploaded path under /uploads
+  if (/^(https?:)?\/\//i.test(url)) return url; 
+  if (/^data:/i.test(url)) return url; 
+  if (url.startsWith("/")) return url; 
   return `/uploads/${url}`;
 }
 
@@ -34,10 +28,29 @@ function firstImageUrl(images?: string[]): string | null {
 
 const categories = ["All", "Eggs", "Feed", "Live Birds", "Equipment", "Supplies"];
 
+export type Product = {
+  id: number;
+  name: string;
+  category: string;
+  price: number;
+  unit: string;
+  inStock: boolean;
+  seller?: string;
+  location?: string;
+  description?: string;
+  rating?: number;
+  reviews?: number;
+  type?: string;
+  contact?: string;
+  details?: string;
+  images?: string[];
+};
+
 export default function Marketplace() {
   const { formatCurrency } = usePreferences();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
+  const [othersOnly, setOthersOnly] = useState(true);
   const [openListDialog, setOpenListDialog] = useState(false);
   const [listingName, setListingName] = useState("");
   const [listingPrice, setListingPrice] = useState("");
@@ -46,79 +59,240 @@ export default function Marketplace() {
   const [listingUnit, setListingUnit] = useState<string>("unit");
   const [listingContact, setListingContact] = useState("");
   const [listingDetails, setListingDetails] = useState("");
-  const [listingImages, setListingImages] = useState(""); // comma-separated URLs
+  const [listingImages, setListingImages] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [orderProduct, setOrderProduct] = useState<Product | null>(null);
+  const [orderQty, setOrderQty] = useState<string>("1");
+  const [orderContact, setOrderContact] = useState<string>("");
 
-  type Product = { id: number; name: string; category: string; price: number; unit: string; inStock: boolean; seller?: string; location?: string; description?: string; rating?: number; reviews?: number; type?: string; contact?: string; details?: string; images?: string[] };
+  const [limit] = useState(24);
+  const [offset, setOffset] = useState(0);
+  const [products, setProducts] = useState<Product[]>([]);
+
+  // Current user info from localStorage to filter out own posts
+  const [userName, setUserName] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userPhone, setUserPhone] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('auth_user');
+      if (raw) {
+        const u = JSON.parse(raw);
+        if (u?.name) setUserName(String(u.name));
+        if (u?.email) setUserEmail(String(u.email));
+        if (u?.phone) setUserPhone(String(u.phone));
+      }
+    } catch {}
+  }, []);
+
+  // Alerts/news
+  const alertsQuery = useQuery({
+    queryKey: ["recent-alerts"],
+    queryFn: async () => {
+      const res = await fetch("/api/alerts/recent");
+      if (!res.ok) throw new Error("Failed to load alerts");
+      return res.json() as Promise<Array<{ id: number; type: "info" | "warning" | "error"; message: string; time: string }>>;
+    },
+  });
 
   const productsQuery = useQuery({
-    queryKey: ["products", { query, category }],
+    queryKey: ["products", { query, category, offset, limit, othersOnly, userName, userEmail, userPhone }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (query) params.set("search", query);
       if (category) params.set("category", category);
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
+      if (othersOnly) {
+        const sellers: string[] = [];
+        if (userName) sellers.push(userName);
+        // Also exclude optimistic 'You' posts
+        sellers.push('You');
+        if (sellers.length) params.set('excludeSeller', sellers.join(','));
+        const needles: string[] = [];
+        if (userEmail) needles.push(userEmail);
+        if (userPhone) needles.push(userPhone);
+        if (needles.length) params.set('excludeContactContains', needles.join(','));
+      }
       const res = await fetch(`/api/products?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load products");
       return res.json() as Promise<Product[]>;
-    }
+    },
   });
 
-  const filtered = useMemo(() => {
-    const data = productsQuery.data || [];
-    return data;
-  }, [productsQuery.data, query, category]);
+  const [hasMore, setHasMore] = useState(true);
 
-  function orderNow(p: typeof productsQuery.data[number]) {
+  useEffect(() => {
+    setOffset(0);
+    setProducts([]);
+    setHasMore(true);
+  }, [query, category]);
+
+  useEffect(() => {
+    if (productsQuery.data) {
+      setProducts((prev) => (offset === 0 ? productsQuery.data! : [...prev, ...productsQuery.data!]));
+      setHasMore((productsQuery.data || []).length === limit);
+    }
+  }, [productsQuery.data]);
+
+  // (Removed image download helpers per request)
+
+  // Export CSV of current filtered products – moved outside useEffect
+  function exportCSV() {
+    const rows = [
+      ['id','name','category','price','unit','inStock','seller','location','contact'],
+      ...filtered.map(p => [p.id, p.name, p.category, String(p.price), p.unit, String(!!p.inStock), p.seller || '', p.location || '', p.contact || ''])
+    ];
+    const csv = rows.map(r => r.map(v => {
+      const s = String(v ?? '');
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = 'marketplace-export.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  const filtered = useMemo(() => {
+    let arr = products;
+    if (othersOnly) {
+      const meName = (userName || '').toLowerCase();
+      const meEmail = (userEmail || '').toLowerCase();
+      const mePhone = (userPhone || '').toLowerCase();
+      const isMine = (p: Product) => {
+        const seller = (p.seller || '').toLowerCase();
+        const contact = (p.contact || '').toLowerCase();
+        return (
+          seller === 'you' ||
+          (meName && seller === meName) ||
+          (meEmail && contact.includes(meEmail)) ||
+          (mePhone && contact.includes(mePhone))
+        );
+      };
+      arr = arr.filter(p => !isMine(p));
+    }
+    return arr;
+  }, [products, othersOnly, userName, userEmail, userPhone]);
+
+  const [featuredIndex, setFeaturedIndex] = useState<Record<number, number>>({});
+  const getImageByIndex = (p: Product) => {
+    const idx = featuredIndex[p.id] ?? 0;
+    const urls = Array.isArray(p.images) ? p.images : [];
+    const url = urls[idx] ?? urls[0];
+    return url ? resolveImageUrl(url) : null;
+  };
+
+  // Image viewer (lightbox) state
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerProduct, setViewerProduct] = useState<Product | null>(null);
+  const [viewerIndex, setViewerIndex] = useState<number>(0);
+  const openViewer = (p: Product, index: number) => {
+    setViewerProduct(p);
+    setViewerIndex(index);
+    setViewerOpen(true);
+  };
+  const viewerImages = viewerProduct && Array.isArray(viewerProduct.images) ? viewerProduct.images : [];
+  const nextImage = () => {
+    if (!viewerProduct) return;
+    const total = viewerImages.length;
+    if (total === 0) return;
+    setViewerIndex((i) => (i + 1) % total);
+  };
+  const prevImage = () => {
+    if (!viewerProduct) return;
+    const total = viewerImages.length;
+    if (total === 0) return;
+    setViewerIndex((i) => (i - 1 + total) % total);
+  };
+
+  // Keyboard controls for lightbox
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!viewerOpen) return;
+      if (e.key === 'Escape') { setViewerOpen(false); }
+      if (e.key === 'ArrowRight') { nextImage(); }
+      if (e.key === 'ArrowLeft') { prevImage(); }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewerOpen, viewerImages.length]);
+
+  // Touch swipe for lightbox
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const SWIPE_THRESHOLD = 40; // px
+  function onTouchStart(e: React.TouchEvent) {
+    const t = e.touches[0];
+    touchStartX.current = t.clientX;
+    touchStartY.current = t.clientY;
+  }
+  function onTouchEnd(e: React.TouchEvent) {
+    if (touchStartX.current == null || touchStartY.current == null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX.current;
+    const dy = t.clientY - touchStartY.current;
+    // ignore mostly-vertical swipes
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > SWIPE_THRESHOLD) {
+      if (dx < 0) nextImage(); else prevImage();
+    }
+    touchStartX.current = null; touchStartY.current = null;
+  }
+
+  function orderNow(p: Product) {
     if (!p.inStock) return;
-    toast({ title: "Added to cart", description: `${p.name} — $${p.price} ${p.unit}` });
+    setOrderProduct(p);
+    setOrderQty("1");
+    setOrderContact("");
+    setOrderOpen(true);
   }
 
   async function listProduct(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
-      // Upload selected files first (if any)
       let uploadedUrls: string[] = [];
       if (selectedFiles.length > 0) {
         setUploading(true);
         const form = new FormData();
-        selectedFiles.forEach(f => form.append('images', f));
-        const up = await fetch('/api/uploads', { method: 'POST', body: form });
+        selectedFiles.forEach(f => form.append("images", f));
+        const up = await fetch("/api/uploads", { method: "POST", body: form });
         if (!up.ok) throw new Error(await up.text());
         const data = await up.json();
         uploadedUrls = Array.isArray(data.urls) ? data.urls : [];
         setUploading(false);
       }
 
-      const manualUrls = listingImages
-        ? listingImages.split(',').map(s => s.trim()).filter(Boolean)
-        : [];
-
+      const manualUrls = listingImages ? listingImages.split(",").map(s => s.trim()).filter(Boolean) : [];
       const images = [...uploadedUrls, ...manualUrls];
 
-      // Robust price parsing (accepts $ and commas)
-      const priceNumber = (()=>{
+      const priceNumber = (() => {
         const cleaned = (listingPrice || "").replace(/[^0-9.]/g, "");
         const n = parseFloat(cleaned);
         return Number.isFinite(n) ? n : 0;
       })();
 
-      const body = { 
-        name: listingName, 
-        price: priceNumber, 
+      const body = {
+        name: listingName,
+        price: priceNumber,
         category: listingCategory || category || "Misc",
-        unit: listingUnit || "unit", 
+        unit: listingUnit || "unit",
         inStock: true,
         type: listingType || undefined,
         contact: listingContact || undefined,
         details: listingDetails || undefined,
-        images: images.length ? images : undefined
+        images: images.length ? images : undefined,
       };
 
-      // Optimistic update for current view
       const tempId = Date.now();
       const optimisticProduct = { id: tempId, seller: "You", location: "—", rating: 5, reviews: 0, inStock: true, description: listingDetails, ...body } as Product;
       queryClient.setQueryData(["products", { query, category }], (old: Product[] | undefined) => {
@@ -126,30 +300,23 @@ export default function Marketplace() {
         return [optimisticProduct, ...arr];
       });
 
-      const r = await fetch("/api/products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) {
-        const errText = await r.text();
-        throw new Error(errText || "Failed to create product");
-      }
+      const r = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text());
       const created = await r.json();
-      // Reconcile optimistic item with real one
+
       queryClient.setQueryData(["products", { query, category }], (old: Product[] | undefined) => {
         const arr = Array.isArray(old) ? old.slice() : [];
         return [created, ...arr.filter(p => p.id !== tempId)];
       });
+
       toast({ title: "Product listed", description: "Your product has been listed." });
       setOpenListDialog(false);
-      setListingName(""); setListingPrice(""); setListingType(""); setListingCategory("Eggs"); setListingUnit("unit"); setListingContact(""); setListingDetails(""); setListingImages("");
-      setSelectedFiles([]);
+      setListingName(""); setListingPrice(""); setListingType(""); setListingCategory("Eggs"); setListingUnit("unit");
+      setListingContact(""); setListingDetails(""); setListingImages(""); setSelectedFiles([]);
       queryClient.invalidateQueries({ queryKey: ["products"] });
     } catch (err) {
       console.error(err);
-      const message = err instanceof Error ? err.message : "Could not list product.";
-      toast({ title: "Failed", description: message });
+      toast({ title: "Failed", description: err instanceof Error ? err.message : "Could not list product." });
     } finally {
       setUploading(false);
       setSaving(false);
@@ -171,7 +338,7 @@ export default function Marketplace() {
           </Button>
         </div>
 
-        {/* Search and Filters */}
+        {/* Search and Filters + Notifications */}
         <Card>
           <CardContent className="p-6">
             <div className="flex flex-col lg:flex-row gap-4">
@@ -184,7 +351,7 @@ export default function Marketplace() {
                   onChange={(e)=>setQuery(e.target.value)}
                 />
               </div>
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex gap-2 flex-wrap items-center">
                 {categories.map((c) => (
                   <Button
                     key={c}
@@ -196,8 +363,31 @@ export default function Marketplace() {
                     {c}
                   </Button>
                 ))}
+                <label className="flex items-center gap-2 text-sm text-muted-foreground ml-2 select-none">
+                  <input type="checkbox" checked={othersOnly} onChange={(e)=>setOthersOnly(e.target.checked)} />
+                  Others only
+                </label>
+                <div className="ml-auto flex items-center gap-2">
+                  <div className="relative">
+                    <Bell className="h-5 w-5 text-foreground" />
+                    {!!(alertsQuery.data?.length) && (
+                      <span className="absolute -top-1 -right-1 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-destructive text-white text-[10px]">
+                        {Math.min(9, alertsQuery.data.length)}{alertsQuery.data.length > 9 ? '+' : ''}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-sm text-muted-foreground hidden sm:inline">News</span>
+                </div>
               </div>
             </div>
+            {!!(alertsQuery.data?.length) && (
+              <div className="mt-4 p-3 rounded-md border bg-muted/30">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-foreground truncate">{alertsQuery.data[0].message}</div>
+                  <span className="text-xs text-muted-foreground ml-3 shrink-0">{alertsQuery.data[0].time}</span>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -206,15 +396,31 @@ export default function Marketplace() {
           {filtered.map((product) => (
             <Card key={product.id} className="hover:shadow-medium transition-smooth">
               <CardHeader className="pb-3">
-                <div className="text-center">
-                  {firstImageUrl(product.images) ? (
-                    <div className="mb-3">
-                      <img src={firstImageUrl(product.images) as string} alt={product.name} className="w-full h-36 object-cover rounded-md border" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display='none';}} />
+                <div>
+                  <AspectRatio ratio={1} className="mb-3 overflow-hidden rounded-full border bg-muted">
+                    {getImageByIndex(product) ? (
+                      <img
+                        src={getImageByIndex(product) as string}
+                        alt={product.name}
+                        className="w-full h-full object-cover transition-transform duration-300 ease-out hover:scale-[1.03] cursor-zoom-in"
+                        onClick={() => openViewer(product, featuredIndex[product.id] ?? 0)}
+                        onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display='none';}}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-3xl text-muted-foreground">🖼️</div>
+                    )}
+                  </AspectRatio>
+                  {/* Thumbnails */}
+                  {Array.isArray(product.images) && product.images.length > 1 && (
+                    <div className="flex gap-2 mb-2">
+                      {product.images.slice(0,4).map((u, idx) => (
+                        <div key={idx} className="w-12 h-12 rounded-full border overflow-hidden bg-background cursor-pointer ring-0 hover:ring-2 hover:ring-primary/50 transition" onClick={()=>setFeaturedIndex((m)=>({ ...m, [product.id]: idx }))}>
+                          <img src={resolveImageUrl(u)} alt={`thumb-${idx}`} className="w-full h-full object-cover" />
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="text-4xl mb-3">🛒</div>
                   )}
-                  <CardTitle className="text-lg leading-tight">{product.name}</CardTitle>
+                  <CardTitle className="text-lg leading-tight text-center">{product.name}</CardTitle>
                   <div className="flex items-center justify-center gap-1 mt-2">
                     <Badge variant="secondary" className="text-xs">
                       {product.category}
@@ -304,6 +510,15 @@ export default function Marketplace() {
             </CardContent>
           </Card>
         )}
+
+        {/* Pagination */}
+        {hasMore && (
+          <div className="mt-6 text-center">
+            <Button variant="outline" onClick={()=>setOffset(o=>o+limit)} disabled={productsQuery.isFetching}>
+              {productsQuery.isFetching ? 'Loading…' : 'Load More'}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* List Product Dialog */}
@@ -366,10 +581,100 @@ export default function Marketplace() {
               <Textarea placeholder="Image URLs (comma-separated)" value={listingImages} onChange={(e)=>setListingImages(e.target.value)} />
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={()=>setOpenListDialog(false)}>Cancel</Button>
               <Button type="submit" disabled={saving} className="bg-gradient-primary">{saving ? 'Listing...' : 'List Product'}</Button>
+              <Button type="button" variant="outline" onClick={()=>setOpenListDialog(false)}>Cancel</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Order Dialog */}
+      <Dialog open={orderOpen} onOpenChange={setOrderOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Place Order</DialogTitle>
+          </DialogHeader>
+          {orderProduct && (
+            <form className="space-y-3" onSubmit={async (e)=>{
+              e.preventDefault();
+              try {
+                const qty = Math.max(1, parseInt(orderQty || '1', 10) || 1);
+                const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId: orderProduct.id, quantity: qty, buyerContact: orderContact || undefined })});
+                if (!res.ok) throw new Error(await res.text());
+                toast({ title: 'Order placed', description: `${orderProduct.name} x${qty}` });
+                setOrderOpen(false);
+              } catch (err) {
+                const message = err instanceof Error ? err.message : 'Could not place order';
+                toast({ title: 'Order failed', description: message });
+              }
+            }}>
+              <div>
+                <div className="text-sm text-muted-foreground">Product</div>
+                <div className="font-medium">{orderProduct.name}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-sm text-muted-foreground">Quantity</label>
+                  <Input type="number" min={1} value={orderQty} onChange={(e)=>setOrderQty(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Contact (optional)</label>
+                  <Input value={orderContact} onChange={(e)=>setOrderContact(e.target.value)} placeholder="Phone or email" />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={()=>setOrderOpen(false)}>Cancel</Button>
+                <Button type="submit" className="bg-gradient-primary">Confirm Order</Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Image Viewer (Lightbox) */}
+      <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>{viewerProduct?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="relative">
+            <div className="overflow-hidden rounded-xl border bg-black">
+              {viewerImages.length > 0 ? (
+                <img
+                  src={resolveImageUrl(viewerImages[viewerIndex])}
+                  alt={`image-${viewerIndex}`}
+                  className="w-full max-h-[70vh] object-contain bg-black"
+                  onTouchStart={onTouchStart}
+                  onTouchEnd={onTouchEnd}
+                />
+              ) : (
+                <div className="w-full h-[60vh] flex items-center justify-center text-muted-foreground">No image</div>
+              )}
+            </div>
+            {viewerImages.length > 1 && (
+              <>
+                <button type="button" onClick={prevImage} className="absolute left-2 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 hover:bg-white shadow">
+                  ‹
+                </button>
+                <button type="button" onClick={nextImage} className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 hover:bg-white shadow">
+                  ›
+                </button>
+              </>
+            )}
+            {viewerImages.length > 0 && (
+              <div className="mt-3 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-2">
+                {viewerImages.map((u, i) => (
+                  <div
+                    key={i}
+                    className={`h-16 border rounded-md overflow-hidden cursor-pointer ${i===viewerIndex ? 'ring-2 ring-primary' : ''}`}
+                    onClick={()=>setViewerIndex(i)}
+                  >
+                    <img src={resolveImageUrl(u)} alt={`mini-${i}`} className="w-full h-full object-cover" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </MainLayout>

@@ -12,6 +12,7 @@ import DailyLogs from "./pages/DailyLogs";
 import Marketplace from "./pages/Marketplace";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
+import Orders from "./pages/Orders";
 import NotFound from "./pages/NotFound";
 import { PreferencesProvider } from "./context/preferences";
 
@@ -32,6 +33,7 @@ const App = () => (
           <Route path="/batches" element={<Batches />} />
           <Route path="/logs" element={<DailyLogs />} />
           <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/orders" element={<Orders />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

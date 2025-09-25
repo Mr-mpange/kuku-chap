@@ -35,6 +35,12 @@ export default function SettingsPage() {
   const [twoFACode, setTwoFACode] = useState("");
   const otpauth = useMemo(() => `otpauth://totp/ChickTrack:you@example.com?secret=${twoFASecret}&issuer=ChickTrack&period=30&digits=6`, [twoFASecret]);
   const [smsPhone, setSmsPhone] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  useEffect(()=>{
+    if (resendCooldown <= 0) return;
+    const t = setInterval(()=>setResendCooldown(v=>v-1), 1000);
+    return ()=>clearInterval(t);
+  }, [resendCooldown]);
 
   // Profile state (demo defaults)
   const [firstName, setFirstName] = useState("John");
@@ -84,23 +90,64 @@ export default function SettingsPage() {
     setTwoFAOpen(true);
   }
 
-  function verifyAndEnable2FA(e: React.FormEvent) {
+  async function verifyAndEnable2FA(e: React.FormEvent) {
     e.preventDefault();
-    // Demo verification: accept any 6-digit code
-    if (!/^\d{6}$/.test(twoFACode)) {
-      toast({ title: "Invalid code", description: "Enter the 6-digit code from your authenticator app." });
+    if (!/^\+[1-9]\d{7,14}$/.test(smsPhone.trim())) {
+      toast({ title: "Invalid phone format", description: "Enter number in international format, e.g. +2557XXXXXXXX." });
       return;
     }
-    setTwoFAEnabled(true);
-    try { localStorage.setItem("twofa_enabled", "1"); } catch {}
-    setTwoFAOpen(false);
-    toast({ title: "Two-factor enabled", description: "2FA is now active for your account (demo)." });
+    if (!/^\d{6}$/.test(twoFACode)) {
+      toast({ title: "Invalid code", description: "Please enter the 6-digit code sent by SMS." });
+      return;
+    }
+    try {
+      const res = await fetch('/api/otp/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: smsPhone.trim(), code: twoFACode.trim() }) });
+      if (!res.ok) {
+        const txt = await res.text();
+        try { const j = JSON.parse(txt); throw new Error(j.error || j.detail || txt); } catch { throw new Error(txt || 'OTP verify failed'); }
+      }
+      // Mark enabled on server for current user
+      try {
+        const raw = localStorage.getItem('auth_user');
+        const u = raw ? JSON.parse(raw) : null;
+        if (u?.id) {
+          const r2 = await fetch(`/api/users/${u.id}/twofa`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, phone: smsPhone.trim() }) });
+          if (!r2.ok) {
+            const t2 = await r2.text();
+            throw new Error(t2 || 'Failed to enable 2FA on server');
+          }
+          const data2 = await r2.json();
+          const newUser = { ...u, phone: data2.user?.phone, twoFAEnabled: true };
+          localStorage.setItem('auth_user', JSON.stringify(newUser));
+        }
+      } catch {}
+      setTwoFAEnabled(true);
+      try { localStorage.setItem("twofa_enabled", "1"); } catch {}
+      setTwoFAOpen(false);
+      toast({ title: "Two-factor enabled", description: "2FA has been enabled for your account." });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not verify code.';
+      toast({ title: 'Verification failed', description: msg });
+    }
   }
 
   function disable2FA() {
-    setTwoFAEnabled(false);
-    try { localStorage.removeItem("twofa_enabled"); } catch {}
-    toast({ title: "Two-factor disabled", description: "2FA has been turned off (demo)." });
+    (async ()=>{
+      try {
+        const raw = localStorage.getItem('auth_user');
+        const u = raw ? JSON.parse(raw) : null;
+        if (u?.id) {
+          const r2 = await fetch(`/api/users/${u.id}/twofa`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
+          if (!r2.ok) throw new Error(await r2.text());
+          const data2 = await r2.json();
+          const newUser = { ...u, twoFAEnabled: false };
+          localStorage.setItem('auth_user', JSON.stringify(newUser));
+        }
+      } catch {}
+      setTwoFAEnabled(false);
+      try { localStorage.removeItem("twofa_enabled"); } catch {}
+      toast({ title: "Two-factor disabled", description: "2FA has been turned off." });
+    })();
   }
 
   const [selectedTab, setSelectedTab] = useState<'profile'|'security'|'notifications'|'preferences'|'data'>('profile');
@@ -531,23 +578,37 @@ export default function SettingsPage() {
                 <Input placeholder="e.g., +1 555 555 0123" value={smsPhone} onChange={(e)=>setSmsPhone(e.target.value)} />
                 <Button type="button" variant="outline" onClick={async ()=>{
                   if (!smsPhone.trim()) { toast({ title: 'Phone required', description: 'Please enter a phone number.' }); return; }
+                  if (!/^\+[1-9]\d{7,14}$/.test(smsPhone.trim())) { toast({ title: 'Invalid phone format', description: 'Use international format starting with + and country code (e.g., +2557XXXXXXXX).' }); return; }
                   try {
-                    const res = await fetch('/api/sms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: 'briq', to: smsPhone.trim(), message: 'Your ChickTrack code is 123456' }) });
+                    const res = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: smsPhone.trim() }) });
                     if (!res.ok) {
                       const txt = await res.text();
                       try {
                         const j = JSON.parse(txt);
-                        throw new Error(j.detail || j.error || 'Could not send SMS');
+                        throw new Error(j.detail || j.error || 'Could not request OTP');
                       } catch {
-                        throw new Error(txt || 'Could not send SMS');
+                        throw new Error(txt || 'Could not request OTP');
                       }
                     }
-                    toast({ title: 'SMS sent', description: `A 6-digit code was sent to ${smsPhone}` });
+                    toast({ title: 'Code sent', description: `A 6-digit code was sent to ${smsPhone}` });
+                    setResendCooldown(30);
                   } catch (e) {
-                    const msg = e instanceof Error ? e.message : 'Could not send SMS. Please try again.';
-                    toast({ title: 'SMS failed', description: msg });
+                    const msg = e instanceof Error ? e.message : 'Could not request OTP. Please try again.';
+                    toast({ title: 'OTP request failed', description: msg });
                   }
                 }}>Send SMS code</Button>
+                <Button type="button" variant="ghost" disabled={resendCooldown>0} onClick={async ()=>{
+                  if (resendCooldown>0) return;
+                  try {
+                    const res = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: smsPhone.trim() }) });
+                    if (!res.ok) throw new Error(await res.text());
+                    setResendCooldown(30);
+                    toast({ title: 'Code resent', description: `Resent code to ${smsPhone}` });
+                  } catch (e) {
+                    const msg = e instanceof Error ? e.message : 'Could not resend code.';
+                    toast({ title: 'Resend failed', description: msg });
+                  }
+                }}>{resendCooldown>0 ? `Resend in ${resendCooldown}s` : 'Resend'}</Button>
               </div>
             </div>
             <form onSubmit={verifyAndEnable2FA} className="space-y-2">

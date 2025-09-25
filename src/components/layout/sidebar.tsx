@@ -20,6 +20,7 @@ const navigation = [
   { name: "Batches", href: "/batches", icon: Layers },
   { name: "Daily Logs", href: "/logs", icon: FileText },
   { name: "Marketplace", href: "/marketplace", icon: ShoppingCart },
+  { name: "Orders", href: "/orders", icon: ShoppingCart },
   { name: "Reports", href: "/reports", icon: BarChart3 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];

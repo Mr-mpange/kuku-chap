@@ -67,6 +67,14 @@ export default function DailyLogs() {
 
   const { data: logs } = useLogs();
   const { data: batches } = useBatches();
+  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
+    queryKey: ["stats"],
+    queryFn: async () => {
+      const res = await fetch('/api/stats');
+      if (!res.ok) throw new Error('Failed to load stats');
+      return res.json() as Promise<{ totalChickens: number; dailyEggs: number; monthlyRevenue: number; mortalityRate: number; changes: any }>;
+    }
+  });
 
   const createMutation = useMutation({
     mutationFn: async (payload: { batchCode: string; date: string; eggs: number; feedKg: number; deaths: number; expenses: number; notes?: string }) => {
@@ -266,7 +274,7 @@ export default function DailyLogs() {
           </Card>
         </div>
 
-        {/* Quick Stats */}
+        {/* Quick Stats (live) */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <Card>
             <CardContent className="p-6">
@@ -275,7 +283,7 @@ export default function DailyLogs() {
                   <Egg className="h-6 w-6 text-accent" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">354</p>
+                  <p className="text-2xl font-bold">{statsLoading ? '…' : (stats?.dailyEggs ?? 0)}</p>
                   <p className="text-sm text-muted-foreground">Eggs Today</p>
                 </div>
               </div>
@@ -289,7 +297,7 @@ export default function DailyLogs() {
                   <Utensils className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">145kg</p>
+                  <p className="text-2xl font-bold">{statsLoading ? '…' : `${(stats?.feedKgToday ?? 0)}kg`}</p>
                   <p className="text-sm text-muted-foreground">Feed Used</p>
                 </div>
               </div>
@@ -303,8 +311,8 @@ export default function DailyLogs() {
                   <DollarSign className="h-6 w-6 text-success" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">$78.25</p>
-                  <p className="text-sm text-muted-foreground">Expenses</p>
+                  <p className="text-2xl font-bold">{statsLoading ? '…' : formatCurrency(stats?.monthlyRevenue ?? 0)}</p>
+                  <p className="text-sm text-muted-foreground">Revenue (Month)</p>
                 </div>
               </div>
             </CardContent>
@@ -317,7 +325,7 @@ export default function DailyLogs() {
                   <AlertTriangle className="h-6 w-6 text-destructive" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">1</p>
+                  <p className="text-2xl font-bold">{statsLoading ? '…' : (stats?.deathsToday ?? 0)}</p>
                   <p className="text-sm text-muted-foreground">Deaths Today</p>
                 </div>
               </div>
